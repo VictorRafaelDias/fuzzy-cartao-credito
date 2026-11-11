@@ -1,0 +1,11 @@
+Fuzzy C-Means | m=1.5 | c=4 | n_init=5 | seed=42
+Iterações: 129 | função objetivo J = 66052.6
+Tamanho dos grupos (pertinência máxima): [2591, 2421, 2029, 1909]
+Clientes de fronteira (pertinência máx < 60%): 3590 (40.1%)
+Silhouette FCM = 0.210 | K-Means = 0.219 | ARI(FCM, K-Means) = 0.686
+
+Características de cada grupo (desvios-padrão em relação à média geral):
+  Grupo 1: Compras (-1.27), Nº de compras (-1.13), Freq. de compras (-1.06)
+  Grupo 2: Nº de compras (+1.02), Freq. de compras à vista (+1.00), Compras à vista (+0.93)
+  Grupo 3: Freq. de compras parceladas (+0.79), Saldo (-0.77), Saque no crédito (-0.72)
+  Grupo 4: Freq. de compras parceladas (-0.51), Compras parceladas (-0.42), Freq. de atualização do saldo (-0.42)
