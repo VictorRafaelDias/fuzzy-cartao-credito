@@ -493,99 +493,113 @@ with tab_interp:
 # Curvas fuzzy
 # --------------------------------------------------------------------------
 with tab_curvas:
-    # variável que mais separa os grupos (maior amplitude entre os centros) como padrão
-    i_var = int(np.argmax(np.ptp(r["centros"], axis=0)))
-    var = st.selectbox("Variável", colunas, index=i_var, format_func=fcm.rotulo, key=f"var_curva_{c}_{len(colunas)}")
     ids = df["CUST_ID"].tolist()
     cli_id = st.selectbox(
         "Cliente de exemplo", ids, index=int(np.argmin(pert_max)), key="cli_curva",
-        help="Começa no cliente mais indeciso (mais perto da fronteira entre os grupos).",
+        help="Escolha um cliente: todos os gráficos abaixo se atualizam. Começa no cliente mais indeciso "
+             "(mais perto da fronteira entre os grupos).",
     )
     i_cli = ids.index(cli_id)
-    valor = float(fcm._coluna_limpa(df, var).iloc[i_cli])
-    termos = fcm.termos_fuzzy(df, var, usar_log)
-    graus = fcm.graus_termos(valor, termos)
-    escala_x = alt.Scale(type="symlog" if termos["log"] else "linear", nice=False)
-    fmt_eixo = ",.0f" if termos["q3"] >= 10 else ".2f"
-    marcas = [0.0, termos["q1"], termos["q2"], termos["q3"], termos["xmax"]]
-    titulo_x = fcm.rotulo(var) + (" (escala logarítmica)" if termos["log"] else "")
-    cor_termo = alt.Scale(domain=["baixa", "média", "alta"], range=["#2ca02c", "#d62728", "#1f77b4"])
-    eixo_y = alt.Y("grau:Q", title="Grau de pertinência", scale=alt.Scale(domain=[0, 1.05]))
+    pert_cli = " · ".join(f"{nomes_grupo[i]}: {fcm.fmt_pct(U[i_cli, i], 0)}" for i in range(c))
+    st.markdown(
+        f"**Cliente {cli_id}** — pertinência final aos grupos (todas as variáveis juntas): {pert_cli}."
+    )
+
+    COR_TERMO = {"baixa": "#2ca02c", "média": "#d62728", "alta": "#1f77b4"}
+    CINZA = "#8b8f98"
+    TAB10 = ["#4c78a8", "#f58518", "#e45756", "#72b7b2", "#54a24b", "#eeca3b", "#b279a2", "#ff9da6"]
+    eixo_y = alt.Y("grau:Q", title=None, scale=alt.Scale(domain=[0, 1.05]),
+                   axis=alt.Axis(values=[0, 0.5, 1], format=".1f"))
+
+    def eixo_x(t: dict) -> alt.X:
+        fmt = ",.0f" if t["q3"] >= 10 else ".2f"
+        marcas = [0.0, t["q1"], t["q2"], t["q3"], t["xmax"]]
+        escala = alt.Scale(type="symlog" if t["log"] else "linear", nice=False)
+        return alt.X("x:Q", title=None, scale=escala,
+                     axis=alt.Axis(values=marcas, format=fmt, labelFontSize=10))
 
     # ---------- 1. Conjuntos nebulosos clássicos ----------
     with st.container(border=True):
         st.subheader("1. Fuzzificação: baixa, média ou alta?")
         st.markdown(
-            "Na lógica fuzzy clássica, um valor não é apenas \"baixo\" ou \"alto\": ele pertence a cada "
-            "faixa com um **grau entre 0 e 1**. Os gráficos abaixo mostram isso para a variável escolhida. "
-            "Onde duas curvas se cruzam, o valor é, ao mesmo tempo, um pouco de cada faixa."
+            "Na lógica fuzzy clássica, um valor não é apenas \"baixo\" ou \"alto\": ele pertence a cada faixa "
+            "com um **grau entre 0 e 1**. Cada gráfico abaixo é uma variável. A linha tracejada marca onde o "
+            "cliente está. **A faixa em que ele mais se encaixa fica colorida e grossa; as outras ficam cinza.** "
+            "Onde duas curvas se cruzam, o valor é um pouco de cada faixa."
         )
-        vert = fcm.vertices_termos(termos)
-        x_enc = alt.X("x:Q", title=titulo_x, scale=escala_x, axis=alt.Axis(values=marcas, format=fmt_eixo))
-        linhas = alt.Chart(vert).mark_line(strokeWidth=3).encode(
-            x=x_enc, y=eixo_y,
-            color=alt.Color("termo:N", scale=cor_termo, title="Faixa"),
+        st.markdown(
+            ":green[**● baixa**] &nbsp; :red[**● média**] &nbsp; :blue[**● alta**] &nbsp; "
+            "(eixo horizontal em escala logarítmica nas variáveis em dinheiro e contagens)"
         )
-        regua = alt.Chart(pd.DataFrame({"x": [valor]})).mark_rule(
-            strokeDash=[5, 4], color="gray", strokeWidth=2,
-        ).encode(x=x_enc)
-        pontos = alt.Chart(pd.DataFrame({
-            "x": [valor] * 3, "grau": list(graus.values()), "termo": list(graus.keys()),
-        })).mark_point(filled=True, size=130, opacity=1).encode(
-            x=x_enc, y=eixo_y, color=alt.Color("termo:N", scale=cor_termo, legend=None),
-            tooltip=["termo", alt.Tooltip("grau:Q", format=".2f")],
-        )
-        st.altair_chart((linhas + regua + pontos).properties(height=320), width="stretch")
-        with st.container(horizontal=True):
-            st.metric(f"Cliente {cli_id}: {fcm.rotulo(var)}", fcm.formatar_valor(var, valor), border=True)
-            for nome_t in ["baixa", "média", "alta"]:
-                st.metric(f"Grau de \"{nome_t}\"", fcm.fmt_pct(graus[nome_t], 0), border=True)
         st.caption(
-            f"Pontos de corte (percentis 25, 50 e 75): {fcm.formatar_valor(var, termos['q1'])}, "
-            f"{fcm.formatar_valor(var, termos['q2'])} e {fcm.formatar_valor(var, termos['q3'])}. "
-            + termos["nota"]
+            "Pontos de corte nos percentis 25, 50 e 75 de cada variável (valores no eixo). Nas variáveis com "
+            "muitos zeros, os percentis são calculados só entre os valores positivos; nas que têm poucos valores "
+            "diferentes, a faixa é dividida em partes iguais."
         )
-        with st.expander("Ver os graus deste cliente em todas as variáveis"):
-            linhas_tab = []
-            for col in colunas:
-                t_col = fcm.termos_fuzzy(df, col, usar_log)
-                v_col = float(fcm._coluna_limpa(df, col).iloc[i_cli])
-                g = fcm.graus_termos(v_col, t_col)
-                linhas_tab.append({
-                    "Variável": fcm.rotulo(col),
-                    "Valor": fcm.formatar_valor(col, v_col),
-                    "Baixa": fcm.fmt_pct(g["baixa"], 0),
-                    "Média": fcm.fmt_pct(g["média"], 0),
-                    "Alta": fcm.fmt_pct(g["alta"], 0),
-                })
-            st.dataframe(pd.DataFrame(linhas_tab), hide_index=True)
+        colunas_graf = st.columns(2)
+        for k, col in enumerate(colunas):
+            t = fcm.termos_fuzzy(df, col, usar_log)
+            valor = float(fcm._coluna_limpa(df, col).iloc[i_cli])
+            graus = fcm.graus_termos(valor, t)
+            dominante = max(graus, key=graus.get)
+            vert = fcm.vertices_termos(t)
+            x_enc = eixo_x(t)
+            fundo = alt.Chart(vert[vert["termo"] != dominante]).mark_line(
+                strokeWidth=1.5, color=CINZA, opacity=0.6).encode(x=x_enc, y=eixo_y, detail="termo:N")
+            frente = alt.Chart(vert[vert["termo"] == dominante]).mark_line(
+                strokeWidth=5, color=COR_TERMO[dominante]).encode(x=x_enc, y=eixo_y)
+            regua = alt.Chart(pd.DataFrame({"x": [valor]})).mark_rule(
+                strokeDash=[5, 4], color="#c9ccd1", strokeWidth=1.5).encode(x=x_enc)
+            pts = pd.DataFrame({"x": [valor] * 3, "grau": list(graus.values()), "termo": list(graus.keys())})
+            pts["cor"] = [COR_TERMO[tm] if tm == dominante else CINZA for tm in pts["termo"]]
+            pontos = alt.Chart(pts).mark_point(filled=True, size=90, opacity=1).encode(
+                x=x_enc, y=eixo_y, color=alt.Color("cor:N", scale=None),
+                tooltip=["termo", alt.Tooltip("grau:Q", format=".2f")])
+            titulo = alt.TitleParams(
+                f"{fcm.rotulo(col)}: {fcm.formatar_valor(col, valor)} → {dominante} ({fcm.fmt_pct(graus[dominante], 0)})",
+                fontSize=13, anchor="start", color=COR_TERMO[dominante])
+            with colunas_graf[k % 2]:
+                st.altair_chart((fundo + frente + regua + pontos).properties(height=190, title=titulo),
+                                width="stretch")
 
     # ---------- 2. Curvas do FCM ----------
     with st.container(border=True):
         st.subheader("2. As curvas que o Fuzzy C-Means desenhou sozinho")
         st.markdown(
-            "No gráfico acima, as faixas \"baixa/média/alta\" foram **definidas por nós**. No Fuzzy C-Means "
-            "ninguém desenha a curva: ela **nasce da distância até o centro de cada grupo**. Este gráfico mostra, "
-            f"para cada grupo, como a pertinência muda conforme **{fcm.rotulo(var)}** varia (as demais variáveis "
-            "ficam na média da base). A curva sobe perto do centro do grupo e cai quando o valor se afasta."
+            "Acima, as faixas \"baixa/média/alta\" foram **definidas por nós**. No Fuzzy C-Means ninguém desenha "
+            "a curva: ela **nasce da distância até o centro de cada grupo**. Cada gráfico mostra, para cada grupo, "
+            "como a pertinência muda conforme aquela variável varia (as demais ficam na média da base). "
+            "**O grupo que mais combina com o valor do cliente naquela variável fica grosso; os outros ficam "
+            "finos e apagados.**"
         )
-        curva = fcm.curva_pertinencia(df, colunas, r["centros"], m, var, usar_log)
         rot_grupo = [f"{nomes_grupo[i]} · {perfis[i]}" for i in range(c)]
-        curva["Grupo"] = [rot_grupo[i] for i in curva["grupo"]]
-        cor_grupo = alt.Scale(domain=rot_grupo, scheme="tableau10")
-        x_curva = alt.X("x:Q", title=titulo_x, scale=escala_x, axis=alt.Axis(values=marcas, format=fmt_eixo))
-        linhas_c = alt.Chart(curva).mark_line(strokeWidth=3).encode(
-            x=x_curva, y=eixo_y, color=alt.Color("Grupo:N", scale=cor_grupo),
-            tooltip=["Grupo", alt.Tooltip("x:Q", format=",.2f", title=fcm.rotulo(var)),
-                     alt.Tooltip("grau:Q", format=".2f", title="Pertinência")],
-        )
-        regua_c = alt.Chart(pd.DataFrame({"x": [valor]})).mark_rule(
-            strokeDash=[5, 4], color="gray", strokeWidth=2,
-        ).encode(x=x_curva)
-        st.altair_chart((linhas_c + regua_c).properties(height=320), width="stretch")
-        pert_cli = " · ".join(f"{nomes_grupo[i]}: {fcm.fmt_pct(U[i_cli, i], 0)}" for i in range(c))
-        st.caption(
-            f"A linha tracejada marca o valor do cliente {cli_id}. Considerando todas as variáveis juntas, "
-            f"a pertinência final dele é: {pert_cli}. Ela não é lida diretamente na curva, porque a curva "
-            "varia só uma variável por vez."
-        )
+        st.markdown(" &nbsp; ".join(
+            f"<span style='color:{TAB10[i % 8]}'>●</span> {rot_grupo[i]}" for i in range(c)
+        ), unsafe_allow_html=True)
+        cor_grupo = alt.Scale(domain=rot_grupo, range=TAB10[:c])
+        colunas_graf2 = st.columns(2)
+        for k, col in enumerate(colunas):
+            t = fcm.termos_fuzzy(df, col, usar_log)
+            valor = float(fcm._coluna_limpa(df, col).iloc[i_cli])
+            curva = fcm.curva_pertinencia(df, colunas, r["centros"], m, col, usar_log)
+            curva["Grupo"] = [rot_grupo[g] for g in curva["grupo"]]
+            xs = curva["x"].unique()
+            x_prox = xs[np.argmin(np.abs(xs - valor))]
+            no_ponto = curva[curva["x"] == x_prox].set_index("grupo")["grau"]
+            g_dom = int(no_ponto.idxmax())
+            curva["larg"] = np.where(curva["grupo"] == g_dom, 5, 1.5)
+            curva["op"] = np.where(curva["grupo"] == g_dom, 1.0, 0.45)
+            x_curva = eixo_x(t)
+            linhas_c = alt.Chart(curva).mark_line().encode(
+                x=x_curva, y=eixo_y, color=alt.Color("Grupo:N", scale=cor_grupo, legend=None),
+                strokeWidth=alt.StrokeWidth("larg:Q", scale=None, legend=None),
+                opacity=alt.Opacity("op:Q", scale=None, legend=None),
+                tooltip=["Grupo", alt.Tooltip("x:Q", format=",.2f", title=fcm.rotulo(col)),
+                         alt.Tooltip("grau:Q", format=".2f", title="Pertinência")])
+            regua_c = alt.Chart(pd.DataFrame({"x": [valor]})).mark_rule(
+                strokeDash=[5, 4], color="#c9ccd1", strokeWidth=1.5).encode(x=x_curva)
+            titulo = alt.TitleParams(
+                f"{fcm.rotulo(col)}: {fcm.formatar_valor(col, valor)} → {nomes_grupo[g_dom]} ({fcm.fmt_pct(no_ponto.max(), 0)})",
+                fontSize=13, anchor="start", color=TAB10[g_dom % 8])
+            with colunas_graf2[k % 2]:
+                st.altair_chart((linhas_c + regua_c).properties(height=190, title=titulo), width="stretch")
