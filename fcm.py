@@ -184,3 +184,105 @@ def descrever_grupos(centros: np.ndarray, colunas: list[str], top: int = 3) -> l
 
 def fmt_pct(x: float, casas: int = 1) -> str:
     return f"{x * 100:.{casas}f}%".replace(".", ",")
+
+
+# --------------------------------------------------------------------------
+# Texto explicativo (nomes e frases automáticas para cada grupo)
+# --------------------------------------------------------------------------
+DESCRICOES = {
+    "BALANCE": "Saldo disponível na conta do cartão no período.",
+    "BALANCE_FREQUENCY": "Com que frequência o saldo é atualizado (0 a 100%).",
+    "PURCHASES": "Valor total gasto em compras.",
+    "ONEOFF_PURCHASES": "Valor gasto em compras feitas de uma só vez (à vista).",
+    "INSTALLMENTS_PURCHASES": "Valor gasto em compras parceladas.",
+    "CASH_ADVANCE": "Dinheiro sacado usando o limite do cartão de crédito.",
+    "PURCHASES_FREQUENCY": "Com que frequência o cliente faz compras (0 a 100%).",
+    "ONEOFF_PURCHASES_FREQUENCY": "Com que frequência faz compras à vista (0 a 100%).",
+    "PURCHASES_INSTALLMENTS_FREQUENCY": "Com que frequência faz compras parceladas (0 a 100%).",
+    "CASH_ADVANCE_FREQUENCY": "Com que frequência saca dinheiro no crédito (0 a 100%).",
+    "CASH_ADVANCE_TRX": "Número de saques no crédito.",
+    "PURCHASES_TRX": "Número de compras realizadas.",
+    "CREDIT_LIMIT": "Limite de crédito do cartão.",
+    "PAYMENTS": "Valor total pago pelo cliente.",
+    "MINIMUM_PAYMENTS": "Valor dos pagamentos mínimos feitos.",
+    "PRC_FULL_PAYMENT": "Percentual de vezes em que a fatura foi paga por inteiro.",
+    "TENURE": "Há quantos meses o cliente tem o cartão.",
+}
+
+
+def eh_proporcao(coluna: str) -> bool:
+    """Variáveis que vão de 0 a 1 e devem ser exibidas como porcentagem."""
+    return "FREQUENCY" in coluna or coluna == "PRC_FULL_PAYMENT"
+
+
+def formatar_valor(coluna: str, valor: float) -> str:
+    if eh_proporcao(coluna):
+        return fmt_pct(valor, 0)
+    if abs(valor) >= 100:
+        return f"{valor:,.0f}".replace(",", ".")
+    return f"{valor:.1f}".replace(".", ",")
+
+
+def nomear_grupo(centro: np.ndarray, colunas: list[str]) -> str:
+    """Dá um nome ao grupo a partir do centróide (em desvios-padrão)."""
+    z = {col: float(v) for col, v in zip(colunas, centro)}
+    g = lambda col: z.get(col, 0.0)  # variável fora da seleção conta como 0
+
+    if g("CASH_ADVANCE") > 0.5 and g("PURCHASES") < -0.5:
+        return "Dependentes de saque"
+    if g("PURCHASES") > 0.6 and g("PURCHASES_TRX") > 0.6 and g("ONEOFF_PURCHASES") > 0.5:
+        return "Compradores intensos"
+    if g("INSTALLMENTS_PURCHASES") > 0.5 and g("PURCHASES_FREQUENCY") > 0.4:
+        return "Compradores que parcelam"
+    if g("PURCHASES_FREQUENCY") < -0.3 and g("CASH_ADVANCE_FREQUENCY") < -0.3:
+        return "Pouco ativos"
+    # sem regra especial: usa a característica mais marcante
+    col, val = max(z.items(), key=lambda kv: abs(kv[1]))
+    return f"{rotulo(col)} {'alto' if val > 0 else 'baixo'}"
+
+
+_CLAUSULAS = [
+    # (variável, limiar, texto se alto, texto se baixo)
+    ("PURCHASES", 0.5, "gastam muito em compras", "gastam pouco em compras"),
+    ("PURCHASES_FREQUENCY", 0.5, "compram com frequência", "raramente compram"),
+    ("ONEOFF_PURCHASES", 0.5, "fazem compras grandes à vista", "quase não compram à vista"),
+    ("INSTALLMENTS_PURCHASES", 0.5, "parcelam bastante", "quase não parcelam"),
+    ("CASH_ADVANCE", 0.5, "sacam muito dinheiro no crédito", "quase não sacam dinheiro no crédito"),
+    ("BALANCE", 0.5, "têm saldo alto", "têm saldo baixo"),
+    ("CREDIT_LIMIT", 0.4, "têm limite alto", "têm limite baixo"),
+    ("PAYMENTS", 0.4, "pagam valores altos", "pagam valores baixos"),
+    ("PRC_FULL_PAYMENT", 0.4, "pagam a fatura inteira com mais frequência", "raramente pagam a fatura inteira"),
+    ("BALANCE_FREQUENCY", 0.4, "movimentam a conta com regularidade", "movimentam pouco a conta"),
+]
+
+
+def frase_grupo(centro: np.ndarray, colunas: list[str]) -> str:
+    """Frase em português: o que os clientes deste grupo costumam fazer."""
+    z = {col: float(v) for col, v in zip(colunas, centro)}
+    partes = []
+    for col, lim, alto, baixo in _CLAUSULAS:
+        if col in z and z[col] >= lim:
+            partes.append(alto)
+        elif col in z and z[col] <= -lim:
+            partes.append(baixo)
+    if not partes:
+        return "Clientes com comportamento próximo da média geral, sem uma característica muito marcante."
+    return "Clientes que " + ", ".join(partes[:-1]) + (" e " if len(partes) > 1 else "") + partes[-1] + "."
+
+
+def principais_diferencas(centro: np.ndarray, colunas: list[str], medias_grupo: pd.Series,
+                          media_geral: pd.Series, top: int = 5) -> pd.DataFrame:
+    """Variáveis que mais separam o grupo da média geral, em unidades originais."""
+    idx = np.argsort(-np.abs(centro))[:top]
+    linhas = []
+    for i in idx:
+        col = colunas[i]
+        g, t = float(medias_grupo[col]), float(media_geral[col])
+        linhas.append({
+            "Variável": rotulo(col),
+            "Neste grupo": formatar_valor(col, g),
+            "Média geral": formatar_valor(col, t),
+            "Em relação à média": ("acima" if centro[i] > 0 else "abaixo")
+                                   + (f" ({g / t:.1f}×)".replace(".", ",") if t > 0 else ""),
+        })
+    return pd.DataFrame(linhas)

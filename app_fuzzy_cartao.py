@@ -14,6 +14,11 @@ from sklearn.decomposition import PCA
 
 import fcm
 
+def dec(x: float, casas: int = 1) -> str:
+    """Número com vírgula decimal."""
+    return f"{x:.{casas}f}".replace(".", ",")
+
+
 ARQUIVO = Path(__file__).parent / "data" / "CC_GENERAL.csv"
 FAIXA_C = range(2, 9)
 
@@ -170,7 +175,7 @@ with tab_geral:
 
     if m >= 2.0:
         st.warning(
-            f"Com m = {m:.1f} e {len(colunas)} variáveis, a pertinência tende a ficar quase igual "
+            f"Com m = {dec(m)} e {len(colunas)} variáveis, a pertinência tende a ficar quase igual "
             "para todos os grupos (centros se aproximam da média geral). Tente m entre 1,3 e 1,6.",
             icon=":material/info:",
         )
@@ -343,27 +348,132 @@ with tab_tabela:
 # Interpretação
 # --------------------------------------------------------------------------
 with tab_interp:
+    milhar = lambda n: f"{int(n):,}".replace(",", ".")
     medias_orig = fcm.perfil_original(df, colunas, rotulos).reindex(nomes_grupo)
     media_geral = df[colunas].mean()
-    carac = fcm.descrever_grupos(r["centros"], colunas, top=4)
+    centros_z = r["centros"]
 
-    st.subheader("Perfil de cada grupo")
+    # nome e frase automáticos de cada grupo
+    perfis = [fcm.nomear_grupo(v, colunas) for v in centros_z]
+    for nome_perfil in set(perfis):
+        if perfis.count(nome_perfil) > 1:  # nomes repetidos ganham numeração
+            seq = iter(range(1, perfis.count(nome_perfil) + 1))
+            perfis = [f"{p} ({next(seq)})" if p == nome_perfil else p for p in perfis]
+    frases = [fcm.frase_grupo(v, colunas) for v in centros_z]
+
+    # ---------------- 1. O que o programa faz ----------------
+    with st.container(border=True):
+        st.subheader("O que este programa faz")
+        st.markdown(
+            f"A base tem **{milhar(len(df))} clientes de cartão de crédito**, cada um descrito por "
+            f"**{len(colunas)} números** (quanto compra, quanto saca em dinheiro, limite, pagamentos...). "
+            f"O programa **separa os clientes em {c} grupos de comportamento parecido**, sem que ninguém "
+            "diga antes quais são os grupos: ele descobre sozinho olhando os dados."
+        )
+        st.markdown("##### O que é a lógica *fuzzy* (nebulosa)")
+        st.markdown(
+            "Num agrupamento comum, cada cliente cai em **um único grupo** (sim ou não). "
+            "No *fuzzy*, cada cliente recebe um **grau de pertinência** a **todos** os grupos, de 0% a 100%, "
+            "somando 100%. Exemplo: 70% no Grupo 1 e 30% no Grupo 2 quer dizer que o cliente se parece com os "
+            "dois, mas mais com o Grupo 1. Isso é mais realista, porque ninguém é 100% \"comprador\" ou 100% "
+            "\"sacador\": existe gente no meio do caminho."
+        )
+        st.markdown("##### Passo a passo")
+        st.markdown(
+            "1. **Limpeza:** valores faltantes viram a mediana da coluna, e frequências acima de 100% são "
+            "corrigidas para 100%.\n"
+            "2. **Mesma escala:** aplica-se log nos valores em dinheiro e depois se padroniza tudo. Sem isso, "
+            "números grandes (milhares) esmagariam os pequenos (porcentagens de 0 a 1).\n"
+            f"3. **Chute inicial:** sorteiam-se {c} pontos centrais, um por grupo (os *centros*).\n"
+            "4. **Pertinência:** para cada cliente mede-se a distância até cada centro. "
+            "Quanto mais perto de um centro, maior a pertinência àquele grupo.\n"
+            "5. **Ajuste dos centros:** cada centro é recalculado como a média de todos os clientes, "
+            "**ponderada pela pertinência** (quem pertence mais ao grupo puxa mais o centro).\n"
+            f"6. **Repetição:** os passos 4 e 5 se repetem até estabilizar (aqui, {r['n_iter']} rodadas na "
+            f"melhor tentativa). O processo é refeito {int(n_init)} vezes com sorteios diferentes e fica a "
+            "melhor tentativa.\n"
+            f"7. **Resultado:** o grupo do cliente é aquele em que ele tem **maior %**. Se essa maior % ficar "
+            f"abaixo de {fcm.fmt_pct(limiar, 0)}, o cliente é considerado de **fronteira**."
+        )
+        st.caption(
+            f"O parâmetro m = {dec(m)} controla o quanto a pertinência é \"borrada\": perto de 1, os clientes "
+            "ficam quase 100% em um só grupo; valores maiores deixam tudo mais misturado."
+        )
+
+    # ---------------- 2. Quem são os grupos ----------------
+    st.subheader("Quem são os grupos")
+    resumo = pd.DataFrame({
+        "Grupo": nomes_grupo,
+        "Perfil": perfis,
+        "Clientes": [milhar(t) for t in tamanhos],
+        "% da base": [fcm.fmt_pct(t / len(df)) for t in tamanhos],
+        "Em uma frase": frases,
+    })
+    st.dataframe(resumo, hide_index=True)
+
     for i, nome in enumerate(nomes_grupo):
+        no_grupo = rotulos == i
+        nitidos = int((~fronteira[no_grupo]).sum())
         with st.container(border=True):
-            n_i = int(tamanhos[i])
-            nit = int((~fronteira[rotulos == i]).sum())
-            n_txt = f"{n_i:,}".replace(",", ".")
-            st.markdown(f"**{nome}** · {n_txt} clientes ({fcm.fmt_pct(n_i / len(df))}) · "
-                        f"{fcm.fmt_pct(nit / max(n_i, 1), 0)} com pertinência acima de {fcm.fmt_pct(limiar, 0)}")
-            for nome_var, z in carac[i]:
-                seta = ":green[↑ acima da média]" if z > 0 else ":red[↓ abaixo da média]"
-                st.markdown(f"- {nome_var}: {seta} ({z:+.2f} desv.-padrão)")
+            st.markdown(f"### {nome} · {perfis[i]}")
+            st.markdown(f"**{frases[i]}**")
+            st.markdown(
+                f"{milhar(tamanhos[i])} clientes ({fcm.fmt_pct(tamanhos[i] / len(df))} da base). "
+                f"{fcm.fmt_pct(nitidos / max(tamanhos[i], 1), 0)} deles têm pertinência acima de "
+                f"{fcm.fmt_pct(limiar, 0)} (clientes \"nítidos\" deste grupo)."
+            )
+            st.markdown("**O que levou o programa a formar este grupo** (as variáveis que mais o separam da média):")
+            st.dataframe(
+                fcm.principais_diferencas(centros_z[i], colunas, medias_orig.loc[nome], media_geral),
+                hide_index=True,
+            )
+            idx_tipico = np.flatnonzero(no_grupo)[np.argmax(U[no_grupo, i])]
+            st.caption(
+                f"Cliente mais típico do grupo: {df['CUST_ID'].iloc[idx_tipico]} "
+                f"({fcm.fmt_pct(U[idx_tipico, i], 0)} de pertinência)."
+            )
 
-    st.subheader("Médias por grupo (escala original)")
-    tabela_medias = medias_orig.rename(columns=fcm.rotulo).T
-    tabela_medias["Média geral"] = media_geral.rename(index=fcm.rotulo)
-    st.dataframe(tabela_medias.round(2))
+    # ---------------- 3. Por que cada cliente cai em um grupo ----------------
+    st.subheader("Por que um cliente cai em um grupo? Dois exemplos")
 
+    def exemplo(i: int, titulo: str, explicacao: str) -> None:
+        a, b = np.argsort(-U[i])[:2]
+        with st.container(border=True):
+            st.markdown(
+                f"**{titulo}: {df['CUST_ID'].iloc[i]}** — {fcm.fmt_pct(U[i, a], 0)} no {nomes_grupo[a]} "
+                f"({perfis[a]}) e {fcm.fmt_pct(U[i, b], 0)} no {nomes_grupo[b]} ({perfis[b]})."
+            )
+            decisivas = np.argsort(-np.abs(centros_z[a] - centros_z[b]))[:4]
+            st.dataframe(
+                pd.DataFrame({
+                    "Variável": [fcm.rotulo(colunas[j]) for j in decisivas],
+                    "Este cliente": [fcm.formatar_valor(colunas[j], df[colunas[j]].iloc[i]) for j in decisivas],
+                    f"Média do {nomes_grupo[a]}": [fcm.formatar_valor(colunas[j], medias_orig.loc[nomes_grupo[a], colunas[j]]) for j in decisivas],
+                    f"Média do {nomes_grupo[b]}": [fcm.formatar_valor(colunas[j], medias_orig.loc[nomes_grupo[b], colunas[j]]) for j in decisivas],
+                }),
+                hide_index=True,
+            )
+            st.caption(explicacao)
+
+    i_claro, i_duvida = int(np.argmax(pert_max)), int(np.argmin(pert_max))
+    exemplo(i_claro, "Cliente bem definido",
+            "Os valores do cliente estão muito perto das médias do grupo em que ele foi colocado e longe das do outro: "
+            "por isso a pertinência é quase total.")
+    exemplo(i_duvida, "Cliente de fronteira",
+            "Os valores ficam no meio do caminho entre os dois grupos. Por isso a pertinência se divide, "
+            "e o programa só o coloca no grupo de maior %. Este é o tipo de informação que um "
+            "agrupamento comum esconde.")
+
+    with st.expander("O que significa cada variável"):
+        st.dataframe(
+            pd.DataFrame({
+                "Variável": [fcm.rotulo(x) for x in colunas],
+                "Significado": [fcm.DESCRICOES.get(x, "") for x in colunas],
+            }),
+            hide_index=True,
+        )
+
+    # ---------------- 4. Comparação com K-Means ----------------
     st.subheader("Fuzzy C-Means × K-Means")
     k = r["kmeans"]
     with st.container(horizontal=True):
@@ -372,6 +482,7 @@ with tab_interp:
         st.metric("Concordância (ARI)", f"{k['ari']:.3f}", border=True,
                   help="1 = os dois métodos formam exatamente os mesmos grupos.")
     st.caption(
-        f"Com m = {m:.1f}, {fcm.fmt_pct(fronteira.mean())} dos clientes ficam na fronteira — "
-        "informação que o K-Means não oferece, pois ele atribui cada cliente a um único grupo."
+        "O K-Means é o agrupamento \"comum\": põe cada cliente em um único grupo. "
+        f"Com m = {dec(m)}, {fcm.fmt_pct(fronteira.mean())} dos clientes ficam na fronteira no fuzzy — "
+        "informação que o K-Means não oferece."
     )
