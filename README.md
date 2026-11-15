@@ -1,10 +1,16 @@
-# Agrupamento fuzzy de clientes de cartão de crédito
+# Lógica fuzzy aplicada a clientes de cartão de crédito
 
 Aplicação de **Fuzzy C-Means** (implementação própria em NumPy) à base
 [Credit Card Dataset for Clustering](https://www.kaggle.com/datasets/arjunbhasin2013/ccdata)
 (Kaggle): 8.950 clientes e 17 variáveis de comportamento de uso do cartão.
 
-Cada cliente recebe um **grau de pertinência** a cada grupo, em vez de um rótulo único.
+O projeto mostra duas técnicas fuzzy independentes:
+
+1. **Score fuzzy (sistema de inferência por regras, estilo Mamdani)** em `fuzzy_score.py`: 4 entradas
+   (utilização do limite, taxa de pagamento integral, frequência de saque e de compras) são fuzzificadas em
+   baixa/média/alta, 13 regras SE-ENTÃO são aplicadas e o centro de gravidade da área resultante é um score de
+   *dependência do crédito* de 0 a 100. Curvas e regras são critério de especialista, sem validação contra inadimplência.
+2. **Fuzzy C-Means**: cada cliente recebe um **grau de pertinência** a cada grupo, em vez de um rótulo único.
 
 ## Como rodar
 
@@ -20,7 +26,8 @@ python -m streamlit run app_fuzzy_cartao.py     # app interativo
 |---|---|
 | `fcm.py` | pré-processamento, Fuzzy C-Means, índices (PC, PE, Xie-Beni, silhouette), comparação com K-Means |
 | `fuzzy_cartao.py` | protótipo de terminal (CSV, TXT e PNG em `resultados/`) |
-| `app_fuzzy_cartao.py` | app Streamlit (5 abas) |
+| `fuzzy_score.py` | score fuzzy por regras (fuzzificação, regras, agregação, defuzzificação) |
+| `app_fuzzy_cartao.py` | app Streamlit (7 abas) |
 | `data/CC_GENERAL.csv` | base original |
 
 ## Metodologia

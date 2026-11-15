@@ -190,24 +190,43 @@ def fmt_pct(x: float, casas: int = 1) -> str:
 # Texto explicativo (nomes e frases automáticas para cada grupo)
 # --------------------------------------------------------------------------
 DESCRICOES = {
-    "BALANCE": "Saldo disponível na conta do cartão no período.",
-    "BALANCE_FREQUENCY": "Com que frequência o saldo é atualizado (0 a 100%).",
-    "PURCHASES": "Valor total gasto em compras.",
-    "ONEOFF_PURCHASES": "Valor gasto em compras feitas de uma só vez (à vista).",
-    "INSTALLMENTS_PURCHASES": "Valor gasto em compras parceladas.",
-    "CASH_ADVANCE": "Dinheiro sacado usando o limite do cartão de crédito.",
-    "PURCHASES_FREQUENCY": "Com que frequência o cliente faz compras (0 a 100%).",
-    "ONEOFF_PURCHASES_FREQUENCY": "Com que frequência faz compras à vista (0 a 100%).",
-    "PURCHASES_INSTALLMENTS_FREQUENCY": "Com que frequência faz compras parceladas (0 a 100%).",
-    "CASH_ADVANCE_FREQUENCY": "Com que frequência saca dinheiro no crédito (0 a 100%).",
-    "CASH_ADVANCE_TRX": "Número de saques no crédito.",
-    "PURCHASES_TRX": "Número de compras realizadas.",
+    "BALANCE": "Saldo em aberto na conta do cartão, ou seja, quanto do limite está comprometido. "
+               "(A descrição original da base é ambígua; nos dados, saldo alto anda junto com saque e fatura paga pela metade.)",
+    "BALANCE_FREQUENCY": "Índice de 0% a 100% de quão seguido o saldo é atualizado (100% = atualiza sempre).",
+    "PURCHASES": "Valor total gasto em compras, acumulado no período da base (não é mensal).",
+    "ONEOFF_PURCHASES": "Parte das compras feita à vista (em uma única parcela), acumulada no período.",
+    "INSTALLMENTS_PURCHASES": "Parte das compras feita parcelada, acumulada no período.",
+    "CASH_ADVANCE": "Valor total sacado em dinheiro usando o limite do cartão, acumulado no período.",
+    "PURCHASES_FREQUENCY": "Índice de 0% (nunca compra) a 100% (compra o tempo todo). É um índice calculado pela base, não uma contagem.",
+    "ONEOFF_PURCHASES_FREQUENCY": "Mesmo índice de 0% a 100%, só para compras à vista.",
+    "PURCHASES_INSTALLMENTS_FREQUENCY": "Mesmo índice de 0% a 100%, só para compras parceladas.",
+    "CASH_ADVANCE_FREQUENCY": "Mesmo índice de 0% a 100%, para saques em dinheiro no crédito.",
+    "CASH_ADVANCE_TRX": "Quantidade de saques em dinheiro no crédito, no período.",
+    "PURCHASES_TRX": "Quantidade de compras realizadas, no período.",
     "CREDIT_LIMIT": "Limite de crédito do cartão.",
-    "PAYMENTS": "Valor total pago pelo cliente.",
-    "MINIMUM_PAYMENTS": "Valor dos pagamentos mínimos feitos.",
-    "PRC_FULL_PAYMENT": "Percentual de vezes em que a fatura foi paga por inteiro.",
-    "TENURE": "Há quantos meses o cliente tem o cartão.",
+    "PAYMENTS": "Valor total pago pelo cliente nas faturas, acumulado no período.",
+    "MINIMUM_PAYMENTS": "Valor do pagamento mínimo exigido da fatura (o cliente pode pagar só isso).",
+    "PRC_FULL_PAYMENT": "Percentual das faturas que o cliente pagou por inteiro (0% = nunca, 100% = sempre).",
+    "TENURE": "Tempo de cartão do cliente, em meses (6 a 12 nesta base).",
 }
+
+# Unidade curta de cada variável (aparece nas tabelas, entre parênteses).
+UNIDADES = {
+    "BALANCE": "valor", "BALANCE_FREQUENCY": "índice 0–100%",
+    "PURCHASES": "valor no período", "ONEOFF_PURCHASES": "valor no período",
+    "INSTALLMENTS_PURCHASES": "valor no período", "CASH_ADVANCE": "valor no período",
+    "PURCHASES_FREQUENCY": "índice 0–100%", "ONEOFF_PURCHASES_FREQUENCY": "índice 0–100%",
+    "PURCHASES_INSTALLMENTS_FREQUENCY": "índice 0–100%", "CASH_ADVANCE_FREQUENCY": "índice 0–100%",
+    "CASH_ADVANCE_TRX": "nº no período", "PURCHASES_TRX": "nº no período",
+    "CREDIT_LIMIT": "valor", "PAYMENTS": "valor no período", "MINIMUM_PAYMENTS": "valor",
+    "PRC_FULL_PAYMENT": "% das faturas", "TENURE": "meses",
+}
+
+
+def rotulo_longo(coluna: str) -> str:
+    """Rótulo com a unidade: 'Compras (valor no período)'."""
+    un = UNIDADES.get(coluna)
+    return f"{rotulo(coluna)} ({un})" if un else rotulo(coluna)
 
 
 def eh_proporcao(coluna: str) -> bool:
@@ -279,7 +298,7 @@ def principais_diferencas(centro: np.ndarray, colunas: list[str], medias_grupo: 
         col = colunas[i]
         g, t = float(medias_grupo[col]), float(media_geral[col])
         linhas.append({
-            "Variável": rotulo(col),
+            "Variável": rotulo_longo(col),
             "Neste grupo": formatar_valor(col, g),
             "Média geral": formatar_valor(col, t),
             "Em relação à média": ("acima" if centro[i] > 0 else "abaixo")
