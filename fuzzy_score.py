@@ -53,6 +53,12 @@ ENTRADAS = {
     },
 }
 
+PONTOS_PADRAO = {k: tuple(v["pontos"]) for k, v in ENTRADAS.items()}
+
+CLASSES = ["Baixa dependência", "Média dependência", "Alta dependência"]
+COR_CLASSE = ["#2ca02c", "#eeca3b", "#d62728"]
+COR_TERMO = {"baixa": "#2ca02c", "média": "#d62728", "alta": "#1f77b4"}
+
 # Conjuntos da saída (score 0-100): mesma forma das entradas.
 SAIDA_PONTOS = (20.0, 50.0, 80.0)
 SAIDA_ROTULO = "Dependência do crédito"
@@ -112,9 +118,11 @@ def conjuntos_saida(grade: np.ndarray) -> np.ndarray:
     return graus(grade, SAIDA_PONTOS).T
 
 
-def inferir(valores: pd.DataFrame, com_curva: bool = False) -> dict:
-    """Roda o sistema fuzzy para todos os clientes de `valores` (saída de valores_entrada)."""
-    mu = {k: graus(valores[k].to_numpy(), ENTRADAS[k]["pontos"]) for k in ENTRADAS}
+def inferir(valores: pd.DataFrame, com_curva: bool = False, pontos: dict | None = None) -> dict:
+    """Roda o sistema fuzzy para todos os clientes de `valores` (saída de valores_entrada).
+    `pontos` permite trocar os cortes das curvas de entrada (chave -> (q1, q2, q3))."""
+    pontos = {**PONTOS_PADRAO, **(pontos or {})}
+    mu = {k: graus(valores[k].to_numpy(), pontos[k]) for k in ENTRADAS}
     forca = np.column_stack([
         np.min([mu[e][:, TERMOS.index(t)] for e, t in cond], axis=0) for cond, _ in REGRAS
     ])

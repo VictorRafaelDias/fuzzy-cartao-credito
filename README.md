@@ -27,7 +27,9 @@ python -m streamlit run app_fuzzy_cartao.py     # app interativo
 | `fcm.py` | pré-processamento, Fuzzy C-Means, índices (PC, PE, Xie-Beni, silhouette), comparação com K-Means |
 | `fuzzy_cartao.py` | protótipo de terminal (CSV, TXT e PNG em `resultados/`) |
 | `fuzzy_score.py` | score fuzzy por regras (fuzzificação, regras, agregação, defuzzificação) |
-| `app_fuzzy_cartao.py` | app Streamlit (7 abas) |
+| `app_fuzzy_cartao.py` | entrada do app Streamlit (menu com 2 páginas) |
+| `apresentacao.py` | página principal, em formato de apresentação: dados, conceito, fuzzificação, regras, score, resultados, conclusões |
+| `apendice_fcm.py` | apêndice: agrupamento Fuzzy C-Means (6 abas) |
 | `data/CC_GENERAL.csv` | base original |
 
 ## Metodologia
