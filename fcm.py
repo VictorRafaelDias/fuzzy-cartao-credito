@@ -286,3 +286,83 @@ def principais_diferencas(centro: np.ndarray, colunas: list[str], medias_grupo: 
                                    + (f" ({g / t:.1f}×)".replace(".", ",") if t > 0 else ""),
         })
     return pd.DataFrame(linhas)
+
+
+# --------------------------------------------------------------------------
+# Curvas de pertinência (visualização da lógica fuzzy)
+# --------------------------------------------------------------------------
+def _coluna_limpa(df: pd.DataFrame, coluna: str) -> pd.Series:
+    """Coluna em unidades originais, com as mesmas correções do pré-processamento."""
+    s = df[coluna].astype(float)
+    s = s.fillna(s.median())
+    if "FREQUENCY" in coluna:
+        s = s.clip(upper=1.0)
+    return s
+
+
+def termos_fuzzy(df: pd.DataFrame, coluna: str, usar_log: bool = True) -> dict:
+    """Define os conjuntos nebulosos 'baixa', 'média' e 'alta' de uma variável
+    (estilo clássico: trapézio, triângulo, trapézio), com os pontos de corte nos
+    percentis 25, 50 e 75. Para variáveis com muitos zeros, os percentis são
+    calculados só entre os valores positivos."""
+    s = _coluna_limpa(df, coluna)
+    base, nota = s, ""
+    if (s <= 0).mean() > 0.2 and (s > 0).sum() >= 20:
+        base = s[s > 0]
+        nota = "Muitos clientes têm valor zero; os pontos de corte foram calculados só entre os valores positivos."
+    q1, q2, q3 = (float(v) for v in base.quantile([0.25, 0.5, 0.75]))
+    if not (q1 < q2 < q3):
+        lo, hi = float(s.min()), float(s.max())
+        q1, q2, q3 = (lo + f * (hi - lo) for f in (0.25, 0.5, 0.75))
+        nota = "Poucos valores diferentes; os pontos de corte dividem a faixa de valores em partes iguais."
+    xmin, xmax = float(s.min()), float(s.quantile(0.99))
+    if xmax <= q3:
+        xmax = float(s.max())
+    if xmax <= q3:
+        xmax = q3
+    log = bool(usar_log and s.min() >= 0 and s.max() > 1)
+    return {"q1": q1, "q2": q2, "q3": q3, "xmin": xmin, "xmax": xmax, "log": log, "nota": nota}
+
+
+def graus_termos(valor: float, t: dict) -> dict[str, float]:
+    """Grau de pertinência de um valor a 'baixa', 'média' e 'alta'."""
+    q1, q2, q3 = t["q1"], t["q2"], t["q3"]
+    return {
+        "baixa": float(np.interp(valor, [q1, q2], [1.0, 0.0])),
+        "média": float(np.interp(valor, [q1, q2, q3], [0.0, 1.0, 0.0], left=0.0, right=0.0)),
+        "alta": float(np.interp(valor, [q2, q3], [0.0, 1.0])),
+    }
+
+
+def vertices_termos(t: dict) -> pd.DataFrame:
+    """Vértices das três funções, para desenhar as linhas."""
+    q1, q2, q3, a, b = t["q1"], t["q2"], t["q3"], t["xmin"], t["xmax"]
+    linhas = [
+        ("baixa", a, 1), ("baixa", q1, 1), ("baixa", q2, 0),
+        ("média", q1, 0), ("média", q2, 1), ("média", q3, 0),
+        ("alta", q2, 0), ("alta", q3, 1), ("alta", b, 1),
+    ]
+    return pd.DataFrame(linhas, columns=["termo", "x", "grau"])
+
+
+def curva_pertinencia(df: pd.DataFrame, colunas: list[str], centros: np.ndarray, m: float,
+                      coluna: str, usar_log: bool = True, n: int = 200) -> pd.DataFrame:
+    """Pertinência a cada grupo quando só uma variável varia e as demais ficam
+    na média da base. Devolve colunas: x (unidade original), grupo (índice), grau."""
+    s = _coluna_limpa(df, coluna)
+    log = bool(usar_log and s.min() >= 0 and s.max() > 1)
+    t = np.log1p(s) if log else s
+    mu, sd = float(t.mean()), float(t.std(ddof=0)) or 1.0
+    lo, hi = float(t.quantile(0.01)), float(t.quantile(0.99))
+    if hi <= lo:
+        lo, hi = float(t.min()), float(t.max())
+    grade = np.linspace(lo, hi, n)
+    P = np.zeros((n, len(colunas)))
+    P[:, colunas.index(coluna)] = (grade - mu) / sd
+    U = _atualizar_U(_dist2(P, centros), m)
+    x = np.expm1(grade) if log else grade
+    return pd.DataFrame({
+        "x": np.repeat(x, U.shape[1]),
+        "grupo": np.tile(np.arange(U.shape[1]), n),
+        "grau": U.ravel(),
+    })
