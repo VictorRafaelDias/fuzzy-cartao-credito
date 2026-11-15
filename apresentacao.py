@@ -1,6 +1,6 @@
 """Apresentação passo a passo: lógica fuzzy aplicada a clientes de cartão de crédito.
 
-Cada aba é um tópico: dados, conceito, fuzzificação, regras, score, resultados e conclusões.
+Cada aba é um tópico: problema, dados, conceito, fuzzificação, regras, score, resultados e conclusões.
 """
 from __future__ import annotations
 
@@ -16,6 +16,7 @@ import fuzzy_score as fs
 
 ARQUIVO = Path(__file__).parent / "data" / "CC_GENERAL.csv"
 CINZA = "#8b8f98"
+COR_MD = {"baixa": "green", "média": "red", "alta": "blue"}  # cores do texto colorido do Streamlit
 USADAS_NO_SCORE = {
     "BALANCE": "Utilização do limite (saldo ÷ limite)",
     "CREDIT_LIMIT": "Utilização do limite (saldo ÷ limite)",
@@ -23,10 +24,20 @@ USADAS_NO_SCORE = {
     "CASH_ADVANCE_FREQUENCY": "Frequência de saque",
     "PURCHASES_FREQUENCY": "Frequência de compras",
 }
+DEFINICAO_CLASSES = {
+    "Baixa dependência": "Usa o cartão como **meio de pagamento**: usa pouco do limite, costuma pagar a fatura inteira e quase não saca dinheiro.",
+    "Média dependência": "**Perfil misto**: usa uma parte do limite, paga a fatura em parte e às vezes saca dinheiro.",
+    "Alta dependência": "Usa o cartão como **empréstimo**: limite quase todo comprometido, paga só parte da fatura e/ou saca dinheiro com frequência.",
+}
 
 
 def pct(x: float, casas: int = 0) -> str:
     return fcm.fmt_pct(x, casas)
+
+
+def br(x: float, casas: int = 0) -> str:
+    """Número no padrão brasileiro: milhar com ponto, decimal com vírgula."""
+    return f"{x:,.{casas}f}".replace(",", "X").replace(".", ",").replace("X", ".")
 
 
 # --------------------------------------------------------------------------
@@ -58,20 +69,15 @@ i_padrao = int(_cand[np.argmin(np.abs(R0["score"][_cand] - 60))]) if len(_cand) 
 # --------------------------------------------------------------------------
 # Gráfico das curvas de uma entrada (baixa / média / alta)
 # --------------------------------------------------------------------------
-def grafico_termos(pontos3, valor: float | None, graus3: np.ndarray | None, titulo: str = "",
-                   altura: int = 210) -> alt.Chart:
-    """Curvas baixa/média/alta. Com `valor`, marca o cliente e destaca a faixa dominante."""
+def grafico_termos(pontos3, chave: str, valor: float, graus3: np.ndarray, altura: int = 210,
+                   rotulo_x: str | None = None) -> alt.Chart:
+    """Curvas baixa/média/alta de uma entrada, com a faixa dominante do cliente em destaque."""
     q1, q2, q3 = pontos3
     vert = fcm.vertices_termos({"q1": q1, "q2": q2, "q3": q3, "xmin": 0.0, "xmax": 1.0})
-    x_enc = alt.X("x:Q", title="valor da entrada", scale=alt.Scale(domain=[0, 1], nice=False),
+    x_enc = alt.X("x:Q", title=rotulo_x or fs.EIXOS[chave], scale=alt.Scale(domain=[0, 1], nice=False),
                   axis=alt.Axis(values=[0, q1, q2, q3, 1.0], format="%", labelFontSize=10))
-    y_enc = alt.Y("grau:Q", title="grau de pertinência", scale=alt.Scale(domain=[0, 1.05]),
+    y_enc = alt.Y("grau:Q", title="pertinência (0 a 1)", scale=alt.Scale(domain=[0, 1.05]),
                   axis=alt.Axis(values=[0, 0.5, 1], format=".1f"))
-    if valor is None:
-        linhas = alt.Chart(vert).mark_line(strokeWidth=3).encode(
-            x=x_enc, y=y_enc, color=alt.Color("termo:N", legend=alt.Legend(title="faixa"),
-                                              scale=alt.Scale(domain=list(fs.COR_TERMO), range=list(fs.COR_TERMO.values()))))
-        return linhas.properties(height=altura, title=titulo)
     grau_t = dict(zip(fs.TERMOS, graus3))
     dominante = max(grau_t, key=grau_t.get)
     fundo = alt.Chart(vert[vert["termo"] != dominante]).mark_line(
@@ -85,8 +91,7 @@ def grafico_termos(pontos3, valor: float | None, graus3: np.ndarray | None, titu
     marcas = alt.Chart(pts).mark_point(filled=True, size=90, opacity=1).encode(
         x=x_enc, y=y_enc, color=alt.Color("cor:N", scale=None),
         tooltip=["termo", alt.Tooltip("grau:Q", format=".2f")])
-    tit = alt.TitleParams(titulo, fontSize=13, anchor="start", color=fs.COR_TERMO[dominante])
-    return (fundo + frente + regua + marcas).properties(height=altura, title=tit)
+    return (fundo + frente + regua + marcas).properties(height=altura)
 
 
 # --------------------------------------------------------------------------
@@ -102,7 +107,7 @@ with st.sidebar:
     st.header("Cliente de exemplo")
     cliente = st.selectbox(
         "Cliente", ids, index=i_padrao, key="cliente",
-        help="Os passos 3, 4 e 5 mostram o cálculo para este cliente. Troque e tudo se atualiza.",
+        help="As abas 4, 5 e 6 mostram o cálculo do score para este cliente. Troque e tudo se atualiza.",
     )
     st.header("Parâmetros das curvas")
     st.caption(
@@ -132,6 +137,7 @@ k_cli = ids.index(cliente)
 det = fs.inferir(V.iloc[[k_cli]], com_curva=True, pontos=pontos)
 score_k = float(det["score"][0])
 cls_k = int(det["classe"][0])
+forca_k = det["forca"][0]
 limite_k = float(df["CREDIT_LIMIT"].fillna(df["CREDIT_LIMIT"].median()).iloc[k_cli])
 score_todos, classe_todos = R["score"], R["classe"]
 
@@ -141,21 +147,77 @@ score_todos, classe_todos = R["score"], R["classe"]
 st.title("Lógica fuzzy aplicada a clientes de cartão de crédito")
 st.caption(
     "Apresentação passo a passo: cada aba é um tópico. Base: Credit Card Dataset for Clustering (Kaggle). "
-    "Objetivo: usar a lógica fuzzy para dar a cada cliente um score de dependência do crédito."
+    "Problema: identificar quais clientes usam o cartão como empréstimo (dependência do crédito)."
 )
 
-(t1, t2, t3, t4, t5, t6, t7) = st.tabs([
-    ":material/database: 1 · Os dados",
-    ":material/lightbulb: 2 · Lógica fuzzy",
-    ":material/tune: 3 · Fuzzificação",
-    ":material/rule: 4 · Regras",
-    ":material/speed: 5 · Score",
-    ":material/analytics: 6 · Resultados",
-    ":material/flag: 7 · Conclusões",
+(t0, t1, t2, t3, t4, t5, t6, t7) = st.tabs([
+    ":material/help: 1 · O problema",
+    ":material/database: 2 · Os dados",
+    ":material/lightbulb: 3 · Lógica fuzzy",
+    ":material/tune: 4 · Fuzzificação",
+    ":material/rule: 5 · Regras",
+    ":material/speed: 6 · Score",
+    ":material/analytics: 7 · Resultados",
+    ":material/flag: 8 · Conclusões",
 ])
 
 # ==========================================================================
-# 1. Os dados
+# 1. O problema
+# ==========================================================================
+with t0:
+    with st.container(border=True):
+        st.subheader("Qual problema estamos resolvendo?")
+        st.markdown(
+            "Um cartão de crédito pode ser usado de duas formas bem diferentes:\n\n"
+            "- como **meio de pagamento**: a pessoa compra e paga a fatura inteira no vencimento;\n"
+            "- como **empréstimo**: a pessoa deixa o saldo crescer, paga só parte da fatura, às vezes saca dinheiro no crédito "
+            "e vive com o limite quase todo usado.\n\n"
+            "Chamamos essa segunda situação de **dependência do crédito do cartão**. A pergunta deste trabalho é:"
+        )
+        st.info(
+            "**Dado o comportamento de uso do cartão de um cliente, o quanto ele depende do crédito do cartão? "
+            "Uma nota de 0 (não depende) a 100 (depende muito).**",
+            icon=":material/target:",
+        )
+        st.markdown(
+            "**Para que serve essa nota?** Um banco poderia usá-la para acompanhar os clientes que mais dependem do crédito "
+            "(maior chance de problemas para pagar), oferecer renegociação ou um empréstimo mais barato, ou rever limites. "
+            "Atenção: isso é uma **hipótese de uso**. Esta base não informa quem de fato deixou de pagar, então o score "
+            "**não prevê inadimplência**. Ele organiza o comportamento observado segundo um critério claro."
+        )
+    with st.container(border=True):
+        st.subheader("Por que usar lógica fuzzy aqui?")
+        st.markdown(
+            "\"Depender do crédito\" não tem uma fronteira nítida. Ninguém passa de \"não depende\" para \"depende\" de um dia para o outro, "
+            "e os critérios que um analista usaria são **vagos, em linguagem natural**: *\"usa muito do limite\"*, *\"quase nunca paga a "
+            "fatura inteira\"*, *\"saca dinheiro com frequência\"*. A lógica fuzzy foi criada justamente para transformar frases assim "
+            "em contas, sem precisar de uma linha de corte rígida."
+        )
+    with st.container(border=True):
+        st.subheader("O que significa baixa, média e alta dependência?")
+        st.dataframe(pd.DataFrame([
+            {"Classe": nome, "Score aproximado": faixa, "Como é o cliente": texto_c.replace("**", "")}
+            for (nome, texto_c), faixa in zip(DEFINICAO_CLASSES.items(), ["até cerca de 35", "de 35 a 65", "acima de 65"])
+        ]), hide_index=True)
+        st.caption("As faixas do score são aproximadas porque as classes também são fuzzy: perto de 35 ou de 65 o cliente é um pouco de duas classes.")
+    with st.container(border=True):
+        st.subheader("O modelo em uma visão")
+        c1, c2, c3 = st.columns(3)
+        with c1, st.container(border=True):
+            st.markdown("**4 ENTRADAS** (o que olhamos no cliente)")
+            st.markdown("- Utilização do limite\n- Taxa de pagamento integral\n- Frequência de saque\n- Frequência de compras")
+            st.caption("Aba 4")
+        with c2, st.container(border=True):
+            st.markdown("**13 REGRAS** (como interpretamos)")
+            st.markdown("Frases do tipo *SE saca com frequência E quase nunca paga a fatura inteira, ENTÃO a dependência é ALTA*.")
+            st.caption("Aba 5")
+        with c3, st.container(border=True):
+            st.markdown("**1 SAÍDA** (o resultado)")
+            st.markdown("O **score de dependência do crédito**, de 0 a 100, e a classe: baixa, média ou alta.")
+            st.caption("Aba 6")
+
+# ==========================================================================
+# 2. Os dados
 # ==========================================================================
 with t1:
     with st.container(border=True):
@@ -204,8 +266,7 @@ with t1:
             })
         st.dataframe(pd.DataFrame(linhas), hide_index=True, height=430)
         st.caption(
-            "A última coluna mostra quais características alimentam o score fuzzy. As outras ficaram de fora para o "
-            "critério ficar simples e explicável (veja a correlação abaixo)."
+            "A última coluna mostra quais características alimentam o score fuzzy. A escolha delas é explicada na aba 4."
         )
 
     with st.container(border=True):
@@ -272,11 +333,9 @@ with t1:
                         else "uma sobe quando a outra cai"),
         } for a, b, r in pares[:8]]), hide_index=True)
         st.markdown(
-            "**Por que isso importa para o score:** várias colunas medem a mesma coisa (por exemplo, compras, compras à vista "
-            "e número de compras andam juntas). Em vez de usar as 17, escolhemos **uma medida de cada comportamento**: "
-            "quanto do limite está usado, se paga a fatura inteira, se saca dinheiro e se compra. "
-            "Nos dados, saldo alto anda junto com saque (correlação +0,50) e contra o pagamento integral (−0,32), "
-            "o que sustenta tratar esses sinais como indícios de dependência do crédito."
+            "**O que isso nos diz:** várias colunas medem o mesmo comportamento (por exemplo, compras, compras à vista "
+            "e número de compras andam juntas). Usar todas repetiria a mesma informação. Por isso o score usa só 4 entradas, "
+            "uma para cada comportamento relevante. Como elas foram escolhidas está na aba 4."
         )
 
     with st.container(border=True):
@@ -284,7 +343,7 @@ with t1:
         freq_cols = [c for c in colunas_num if "FREQUENCY" in c]
         acima = int(sum((df[c] > 1).sum() for c in freq_cols))
         st.markdown(
-            f"- **Faltantes:** 313 clientes sem *pagamento mínimo* e 1 sem *limite de crédito*. O limite faltante é preenchido com a mediana. "
+            "- **Faltantes:** 313 clientes sem *pagamento mínimo* e 1 sem *limite de crédito*. O limite faltante é preenchido com a mediana. "
             "O pagamento mínimo não entra no score.\n"
             f"- **Índices acima de 100%:** {acima} valores de frequência passam de 1 (100%), o que não faz sentido para um índice. "
             "Eles são limitados a 100%.\n"
@@ -292,7 +351,7 @@ with t1:
         )
 
 # ==========================================================================
-# 2. Lógica fuzzy
+# 3. Lógica fuzzy
 # ==========================================================================
 with t2:
     with st.container(border=True):
@@ -322,8 +381,7 @@ with t2:
                 for nome_t, g in zip(fs.TERMOS, g_demo):
                     st.metric(nome_t.capitalize(), pct(g), border=True)
         with c2:
-            st.altair_chart(grafico_termos(pontos["uso"], uso_demo, g_demo, f"{pct(uso_demo)} do limite usado", 260),
-                            width="stretch")
+            st.altair_chart(grafico_termos(pontos["uso"], "uso", uso_demo, g_demo, 260), width="stretch")
         st.caption(
             "Mova o controle devagar perto de 60%: a regra tradicional troca de média para alta de uma só vez. "
             "No fuzzy, a pertinência a \"média\" cai e a \"alta\" sobe aos poucos."
@@ -333,10 +391,10 @@ with t2:
         st.subheader("Como o score é construído: 4 passos")
         cols4 = st.columns(4)
         passos = [
-            ("1 · Fuzzificação", "Cada informação do cliente vira graus de **baixa, média e alta**.", "Aba 3"),
-            ("2 · Regras", "Regras **SE-ENTÃO** combinam as informações e dizem qual a dependência resultante.", "Aba 4"),
-            ("3 · Agregação", "Cada regra ativa contribui com uma **área**; juntamos todas.", "Aba 5"),
-            ("4 · Defuzzificação", "O **centro de gravidade** da área é um número de 0 a 100: o **score**.", "Aba 5"),
+            ("1 · Fuzzificação", "Cada informação do cliente vira graus de **baixa, média e alta**.", "Aba 4"),
+            ("2 · Regras", "Regras **SE-ENTÃO** combinam as informações e dizem qual a dependência resultante.", "Aba 5"),
+            ("3 · Agregação", "Cada regra ativa contribui com uma **área**; juntamos todas.", "Aba 6"),
+            ("4 · Defuzzificação", "O **centro de gravidade** da área é um número de 0 a 100: o **score**.", "Aba 6"),
         ]
         for caixa, (titulo, texto_p, aba) in zip(cols4, passos):
             with caixa, st.container(border=True):
@@ -344,20 +402,64 @@ with t2:
                 st.markdown(texto_p)
                 st.caption(aba)
         st.markdown(
-            "O **score** vai de 0 (usa o cartão como meio de pagamento: usa pouco do limite, paga a fatura inteira, não saca) "
-            "a 100 (usa o cartão como empréstimo: limite quase todo usado, paga só parte da fatura, saca dinheiro). "
-            "Depois, o próprio score é fuzzificado em **baixa, média e alta dependência**, e é assim que o cliente é classificado (aba 6)."
+            "O **score** vai de 0 (usa o cartão como meio de pagamento) a 100 (usa o cartão como empréstimo), como definido na aba 1. "
+            "Depois, o próprio score é fuzzificado em **baixa, média e alta dependência**, e é assim que o cliente é classificado (aba 7)."
         )
 
 # ==========================================================================
-# 3. Fuzzificação
+# 4. Fuzzificação
 # ==========================================================================
 with t3:
     with st.container(border=True):
-        st.subheader("Passo 1 · Fuzzificação: as 4 entradas")
+        st.subheader("Como escolhemos as 4 entradas?")
         st.markdown(
-            "São quatro informações sobre o cliente. Para cada uma, definimos **três curvas** (baixa, média, alta) "
-            "com **três pontos de corte**:\n\n"
+            "**Não foi sorteio, e também não foram \"as 4 colunas mais correlacionadas\".** O critério foi:\n\n"
+            "1. **Escolher os comportamentos que indicam usar o cartão como empréstimo**: quanto do limite está em uso, "
+            "se a fatura é quitada, se saca dinheiro no crédito e se usa o cartão para comprar.\n"
+            "2. **Usar uma coluna por comportamento.** A correlação (aba 2) mostra que várias colunas medem o mesmo "
+            "comportamento. Usar todas só repetiria a informação e daria peso demais a ele.\n"
+            "3. **Preferir colunas fáceis de interpretar e comparáveis entre clientes**: índices de 0 a 100% (frequência) "
+            "em vez de valores em dinheiro, que dependem do tamanho do limite de cada um."
+        )
+        familias = [
+            ("Quanto do limite está em uso", ["BALANCE", "CREDIT_LIMIT"], "Utilização do limite = saldo ÷ limite",
+             "Saldo sozinho engana (R$ 2.000 é muito para limite de 2.500 e pouco para 20.000). A razão é comparável."),
+            ("Como paga a fatura", ["PAYMENTS", "MINIMUM_PAYMENTS", "PRC_FULL_PAYMENT"], "Taxa de pagamento integral",
+             "É a única que diz diretamente se o cliente quita a fatura. Os valores pagos dependem do tamanho da compra."),
+            ("Saque de dinheiro no crédito", ["CASH_ADVANCE", "CASH_ADVANCE_TRX", "CASH_ADVANCE_FREQUENCY"], "Frequência de saque",
+             "Já em escala 0 a 100% e muito ligada às outras duas colunas de saque."),
+            ("Uso do cartão para comprar", ["PURCHASES", "ONEOFF_PURCHASES", "INSTALLMENTS_PURCHASES", "PURCHASES_TRX",
+                                            "PURCHASES_FREQUENCY", "ONEOFF_PURCHASES_FREQUENCY",
+                                            "PURCHASES_INSTALLMENTS_FREQUENCY"], "Frequência de compras",
+             "Resume as 7 colunas de compras, que andam juntas, em um índice de 0 a 100%."),
+        ]
+        corr_abs = df[colunas_num].corr().abs()
+        linhas_f = []
+        for comport, cols, escolhida, motivo in familias:
+            sub = corr_abs.loc[cols, cols].to_numpy()
+            media_c = float((sub.sum() - len(cols)) / (len(cols) * (len(cols) - 1)))
+            linhas_f.append({
+                "Comportamento": comport,
+                "Colunas da base relacionadas": ", ".join(fcm.rotulo(c) for c in cols),
+                "Correlação média entre elas": f"{media_c:.2f}".replace(".", ","),
+                "Entrada escolhida": escolhida,
+                "Por que esta": motivo,
+            })
+        st.dataframe(pd.DataFrame(linhas_f), hide_index=True)
+        st.caption(
+            "Correlação média: média dos valores absolutos das correlações entre as colunas do grupo (0 = nada a ver, 1 = idênticas). "
+            "Nos grupos de compras e de saque ela é alta, então uma coluna representa bem as outras. No grupo de pagamento é "
+            "baixa: ali a escolha vem do critério de negócio (quitar ou não a fatura), não da correlação."
+        )
+        st.markdown(
+            "**Colunas que ficaram de fora:** *Freq. de atualização do saldo* e *Tempo de cartão* quase não se relacionam com usar o "
+            "cartão como empréstimo. Os demais valores em dinheiro e contagens foram resumidos pelas entradas escolhidas."
+        )
+
+    with st.container(border=True):
+        st.subheader("Passo 1 · Fuzzificação: transformar cada entrada em graus")
+        st.markdown(
+            "Para cada entrada definimos **três curvas** (baixa, média, alta) com **três pontos de corte**:\n\n"
             "- **baixa** vale 100% até o primeiro ponto e cai a 0% no segundo;\n"
             "- **média** tem o pico (100%) no segundo ponto e vale 0% no primeiro e no terceiro;\n"
             "- **alta** sobe de 0% no segundo ponto até 100% no terceiro e se mantém.\n\n"
@@ -391,7 +493,7 @@ with t3:
             st.dataframe(pd.DataFrame(linhas), hide_index=True)
 
     with st.container(border=True):
-        st.subheader(f"Cliente {cliente}")
+        st.subheader(f"Exemplo: cliente {cliente}")
         st.markdown(
             f"Saldo de **{fcm.formatar_valor('BALANCE', float(df['BALANCE'].iloc[k_cli]))}** para um limite de "
             f"**{fcm.formatar_valor('CREDIT_LIMIT', limite_k)}** (utilização de {pct(V['uso'].iloc[k_cli])}), "
@@ -399,122 +501,150 @@ with t3:
             f"e **{pct(V['pagamento'].iloc[k_cli])}** das faturas pagas por inteiro."
         )
         st.markdown(
-            "Em cada gráfico, a linha tracejada marca onde o cliente está. **A faixa em que ele mais se encaixa fica colorida e "
-            "grossa; as outras ficam cinza.**"
+            "Em cada gráfico, a **linha tracejada** marca o valor do cliente e os pontos mostram o grau em cada curva. "
+            "**A faixa em que ele mais se encaixa fica colorida e grossa; as outras ficam cinza.** Acima de cada gráfico, "
+            "a frase resume o resultado."
         )
         cols_g = st.columns(2)
         linhas_g = []
         for n, (chave, e) in enumerate(fs.ENTRADAS.items()):
             g3 = det["mu"][chave][0]
             dom = fs.TERMOS[int(np.argmax(g3))]
-            titulo = f"{e['rotulo']}: {pct(V[chave].iloc[k_cli])} → {dom} ({pct(g3.max())})"
-            with cols_g[n % 2]:
-                st.altair_chart(grafico_termos(pontos[chave], float(V[chave].iloc[k_cli]), g3, titulo), width="stretch")
+            with cols_g[n % 2], st.container(border=True):
+                st.markdown(
+                    f"**{e['rotulo']}** · o cliente está em **{pct(V[chave].iloc[k_cli])}** "
+                    f"→ faixa :{COR_MD[dom]}[**{dom.upper()}** ({pct(g3.max())})]"
+                )
+                st.altair_chart(grafico_termos(pontos[chave], chave, float(V[chave].iloc[k_cli]), g3), width="stretch")
             linhas_g.append({"Entrada": e["rotulo"], "Valor do cliente": pct(V[chave].iloc[k_cli]),
-                             "Baixa": pct(g3[0]), "Média": pct(g3[1]), "Alta": pct(g3[2])})
+                             "Grau em BAIXA": pct(g3[0]), "Grau em MÉDIA": pct(g3[1]), "Grau em ALTA": pct(g3[2])})
         st.markdown("##### Resultado da fuzzificação deste cliente")
         st.dataframe(pd.DataFrame(linhas_g), hide_index=True)
         st.caption(
-            "Estes 12 números (4 entradas × 3 faixas) são o que as regras vão usar no próximo passo. "
-            "Note que as três faixas de uma mesma entrada nunca somam mais que 100%, e muitas vezes o cliente fica "
-            "entre duas faixas."
+            "Estes 12 números (4 entradas × 3 faixas) são o que as regras vão usar no próximo passo (aba 5). "
+            "Muitas vezes o cliente fica entre duas faixas, com um grau em cada."
         )
 
 # ==========================================================================
-# 4. Regras
+# 5. Regras
 # ==========================================================================
 with t4:
-    forca_k = det["forca"][0]
     with st.container(border=True):
-        st.subheader("Passo 2 · Regras SE-ENTÃO")
+        st.subheader(f"De onde partimos: cliente {cliente}")
+        st.markdown("Estes são os graus calculados na aba 4 (fuzzificação). As regras abaixo usam exatamente estes números.")
+        st.dataframe(pd.DataFrame([{
+            "Entrada": e["rotulo"], "Valor do cliente": pct(V[k].iloc[k_cli]),
+            "Grau em BAIXA": pct(det["mu"][k][0][0]), "Grau em MÉDIA": pct(det["mu"][k][0][1]),
+            "Grau em ALTA": pct(det["mu"][k][0][2]),
+        } for k, e in fs.ENTRADAS.items()]), hide_index=True)
+
+    with st.container(border=True):
+        st.subheader("Passo 2 · As regras SE-ENTÃO")
         st.markdown(
-            "As regras são o **conhecimento do especialista** escrito em forma de frases. Cada regra junta duas ou três "
-            "condições e diz qual deve ser a dependência do crédito. Exemplo: *SE a frequência de saque é ALTA E a taxa de "
-            "pagamento integral é BAIXA, ENTÃO a dependência é ALTA*.\n\n"
-            "Como cada condição é uma **faixa com grau entre 0 e 1**, a regra também ganha um grau: a **força**. "
-            "O \"E\" fuzzy é o **mínimo** dos graus, como numa corrente que é tão forte quanto o elo mais fraco. "
-            "Força 0% = a regra não se aplica a este cliente."
+            "As regras são o **conhecimento do especialista** escrito em frases. Cada regra tem de **uma a três condições** "
+            "(SE, E, E) e uma **conclusão** sobre a dependência do crédito (ENTÃO). Cada condição é do tipo *entrada é FAIXA* "
+            "(por exemplo, *Frequência de saque é ALTA*). A coluna **Raciocínio** explica a ideia de cada regra."
         )
-        tabela_regras = pd.DataFrame({
-            "Nº": list(range(1, len(fs.REGRAS) + 1)),
-            "SE (condições)": [fs.texto_condicao(i) for i in range(len(fs.REGRAS))],
-            "ENTÃO dependência é": [cons.upper() for _, cons in fs.REGRAS],
-            f"Força para o cliente {cliente}": forca_k,
-        })
+        st.markdown(
+            "**O que é a \"força\" de uma regra?** É a resposta para: *\"o quanto esta regra vale para este cliente?\"* "
+            "Entre parênteses em cada condição está o **grau** que o cliente tem naquela faixa (veja a tabela acima). "
+            "A **força** é o **menor** desses graus. É como uma corrente: ela é tão forte quanto o elo mais fraco. "
+            "Se uma condição não se aplica ao cliente (0%), a regra inteira vale 0% e não influencia o resultado."
+        )
+        filas = []
+        for i, (cond, cons) in enumerate(fs.REGRAS):
+            cel = [f"{fs.texto_cond(e, t)} ({pct(det['mu'][e][0][fs.TERMOS.index(t)])})" for e, t in cond]
+            cel += ["-"] * (3 - len(cel))
+            filas.append({
+                "Nº": i + 1, "SE (condição 1)": cel[0], "E (condição 2)": cel[1], "E (condição 3)": cel[2],
+                "ENTÃO a dependência é": cons.upper(), "Raciocínio": fs.REGRAS_PORQUE[i],
+                f"Força para o cliente {cliente}": forca_k[i],
+            })
         st.dataframe(
-            tabela_regras, hide_index=True,
+            pd.DataFrame(filas), hide_index=True,
             column_config={
                 "Nº": st.column_config.NumberColumn(width="small"),
-                "SE (condições)": st.column_config.TextColumn(width="large"),
+                "SE (condição 1)": st.column_config.TextColumn(width="large"),
+                "E (condição 2)": st.column_config.TextColumn(width="large"),
+                "E (condição 3)": st.column_config.TextColumn(width="large"),
+                "Raciocínio": st.column_config.TextColumn(width="large"),
                 f"Força para o cliente {cliente}": st.column_config.ProgressColumn(
                     min_value=0.0, max_value=1.0, format="percent"),
             },
         )
-        st.caption(f"{int((forca_k > 0).sum())} das {len(fs.REGRAS)} regras se aplicam a este cliente.")
+        st.caption(f"{int((forca_k > 0).sum())} das {len(fs.REGRAS)} regras têm alguma força para este cliente.")
 
     with st.container(border=True):
-        st.subheader("Quais regras pesam para este cliente?")
+        st.subheader("Quais regras mais influenciam o resultado deste cliente?")
+        st.markdown(
+            "Cada barra é a **força de uma regra** (do mesmo jeito que na tabela). Quanto **maior a barra**, mais aquela regra "
+            "vale para este cliente e **mais ela puxa o score** para a conclusão dela. A **cor** mostra a conclusão: "
+            "verde = baixa dependência, amarelo = média, vermelho = alta."
+        )
         barras = pd.DataFrame({
             "Regra": [f"Regra {i + 1}" for i in range(len(fs.REGRAS))],
             "Força": forca_k,
-            "Resultado": [f"dependência {cons}" for _, cons in fs.REGRAS],
+            "Conclusão da regra": [f"dependência {cons}" for _, cons in fs.REGRAS],
         })
         st.altair_chart(
             alt.Chart(barras).mark_bar().encode(
                 y=alt.Y("Regra:N", sort=list(barras["Regra"]), title=None),
-                x=alt.X("Força:Q", scale=alt.Scale(domain=[0, 1]), axis=alt.Axis(format="%")),
-                color=alt.Color("Resultado:N", scale=alt.Scale(
-                    domain=["dependência baixa", "dependência média", "dependência alta"],
-                    range=fs.COR_CLASSE)),
-                tooltip=["Regra", "Resultado", alt.Tooltip("Força:Q", format=".0%")],
+                x=alt.X("Força:Q", scale=alt.Scale(domain=[0, 1]), axis=alt.Axis(format="%"), title="força da regra para este cliente"),
+                color=alt.Color("Conclusão da regra:N", scale=alt.Scale(
+                    domain=["dependência baixa", "dependência média", "dependência alta"], range=fs.COR_CLASSE)),
+                tooltip=["Regra", "Conclusão da regra", alt.Tooltip("Força:Q", format=".0%")],
             ).properties(height=330),
             width="stretch",
         )
-        st.caption("A cor mostra a conclusão de cada regra: verde = baixa dependência, amarelo = média, vermelho = alta.")
 
         st.markdown("##### Exemplo de cálculo das duas regras mais fortes")
-        ordem = np.argsort(-forca_k)[:2]
-        for r_i in ordem:
+        for r_i in np.argsort(-forca_k)[:2]:
             if forca_k[r_i] <= 0:
                 continue
             cond, cons = fs.REGRAS[r_i]
-            partes = []
-            for e, t in cond:
-                partes.append(f"{fs.ENTRADAS[e]['rotulo'].lower()} {t.upper()} ({pct(det['mu'][e][0][fs.TERMOS.index(t)])})")
+            partes = [f"{fs.texto_cond(e, t)} (grau {pct(det['mu'][e][0][fs.TERMOS.index(t)])})" for e, t in cond]
             st.markdown(
-                f"- **Regra {r_i + 1}:** {' E '.join(partes)}. Força = menor valor = **{pct(forca_k[r_i])}**. "
-                f"Conclusão: dependência **{cons.upper()}**."
+                f"- **Regra {r_i + 1}** ({fs.REGRAS_PORQUE[r_i].lower()}) Condições: {'; '.join(partes)}. "
+                f"Força = o menor grau = **{pct(forca_k[r_i])}**. Conclusão: dependência **{cons.upper()}**."
             )
 
 # ==========================================================================
-# 5. Score
+# 6. Score
 # ==========================================================================
 with t5:
+    forca_cons = [
+        max([float(forca_k[i]) for i, (_, cons) in enumerate(fs.REGRAS) if cons == fs.TERMOS[n]] or [0.0])
+        for n in range(3)
+    ]
+    grade = det["grade"]
     with st.container(border=True):
-        st.subheader("Passo 3 · Agregação")
+        st.subheader("Passo 3 · Agregação: juntar as regras em três conclusões")
         st.markdown(
-            "Cada regra aponta para uma conclusão: dependência baixa, média ou alta. Para cada conclusão, vale a **regra mais forte** "
-            "que aponta para ela (o \"OU\" fuzzy é o **máximo**):"
+            f"As 13 regras de cada cliente terminam em apenas **três conclusões**: dependência baixa, média ou alta. "
+            "Para cada conclusão vale a **regra mais forte** que aponta para ela (o \"OU\" fuzzy é o **máximo**). "
+            f"Para o cliente **{cliente}**:"
         )
-        forca_cons = {
-            cl: max([float(forca_k[i]) for i, (_, cons) in enumerate(fs.REGRAS) if cons == fs.TERMOS[n]] or [0.0])
-            for n, cl in enumerate(fs.CLASSES)
-        }
         with st.container(horizontal=True):
-            for cl, v in forca_cons.items():
-                st.metric(f"Força para {cl.lower()}", pct(v), border=True)
+            for cl, v in zip(fs.CLASSES, forca_cons):
+                st.metric(f"Força de \"{cl.lower()}\"", pct(v), border=True)
         st.markdown(
-            "Cada conclusão é uma região da escala de 0 a 100 (contornos cinzas no gráfico). Uma conclusão com força 60%, por exemplo, "
-            "preenche essa região só até a altura de 60%. Juntando as três, obtém-se a **área laranja**."
+            "Cada conclusão é uma **região na escala de 0 a 100** (o contorno cinza). Quanto mais forte a conclusão, mais "
+            "a região é preenchida (de baixo para cima). Uma conclusão com força 60% preenche a região só até 60% de altura: "
+            "ela é \"cortada\" nessa altura."
         )
-
-    with st.container(border=True):
-        st.subheader("Passo 4 · Defuzzificação: o score")
-        st.markdown(
-            "Para transformar a área em **um número**, usa-se o **centro de gravidade** (o ponto onde a área se equilibra): "
-            "score = soma de (posição × altura) ÷ soma das alturas. Em vez de fazer a conta, basta ver onde a **linha vermelha** cai."
-        )
-        grade = det["grade"]
+        cols3 = st.columns(3)
+        for j, (caixa, cl) in enumerate(zip(cols3, fs.CLASSES)):
+            with caixa, st.container(border=True):
+                st.markdown(f"**{cl}** · força {pct(forca_cons[j])}")
+                contorno = pd.DataFrame({"x": grade, "grau": det["saida"][j]})
+                corte = pd.DataFrame({"x": grade, "grau": np.minimum(forca_cons[j], det["saida"][j])})
+                xs = alt.X("x:Q", title="score (0 a 100)", scale=alt.Scale(domain=[0, 100]), axis=alt.Axis(values=[0, 50, 100]))
+                ys = alt.Y("grau:Q", title=None, scale=alt.Scale(domain=[0, 1.05]), axis=alt.Axis(values=[0, 0.5, 1], format=".1f"))
+                st.altair_chart(
+                    (alt.Chart(corte).mark_area(color=fs.COR_CLASSE[j], opacity=0.7).encode(x=xs, y=ys)
+                     + alt.Chart(contorno).mark_line(color=CINZA, strokeWidth=1.5).encode(x=xs, y=ys)).properties(height=150),
+                    width="stretch")
+        st.markdown("**Agregação** é juntar as três regiões preenchidas em uma só área (a **área laranja** abaixo).")
         contornos = pd.DataFrame({
             "x": np.tile(grade, 3), "grau": det["saida"].ravel(), "faixa": np.repeat(fs.CLASSES, len(grade)),
         })
@@ -525,28 +655,58 @@ with t5:
                     axis=alt.Axis(values=[0, 0.5, 1], format=".1f"))
         g_cont = alt.Chart(contornos).mark_line(color=CINZA, strokeWidth=1.5).encode(x=x_s, y=y_s, detail="faixa:N")
         g_area = alt.Chart(area).mark_area(color="#f58518", opacity=0.65).encode(x=x_s, y=y_s)
-        g_reg = alt.Chart(pd.DataFrame({"x": [score_k]})).mark_rule(color="#e45756", strokeWidth=3).encode(x=x_s)
         g_txt = alt.Chart(rotulos_x).mark_text(color=CINZA, fontSize=12).encode(x=x_s, y=y_s, text="txt:N")
-        st.altair_chart((g_cont + g_area + g_reg + g_txt).properties(height=300), width="stretch")
+        st.altair_chart((g_cont + g_area + g_txt).properties(height=260), width="stretch")
+
+    with st.container(border=True):
+        st.subheader("Passo 4 · Defuzzificação: da área ao score")
+        agg = det["agregada"][0]
+        soma_ponderada = float((grade * agg).sum())
+        soma_alturas = float(agg.sum())
+        st.markdown(
+            "Falta transformar a área em **um único número**. Usa-se o **centro de gravidade**: o ponto da escala onde a área se "
+            "equilibraria, como o ponto de equilíbrio de uma régua com pesos. Na conta:\n\n"
+            "**score = soma de (posição × altura da área) ÷ soma das alturas**"
+        )
+        st.markdown(
+            f"Neste cliente: soma de (posição × altura) = **{br(soma_ponderada, 1)}** e soma das alturas = **{br(soma_alturas, 1)}**, "
+            f"logo score = {br(soma_ponderada, 1)} ÷ {br(soma_alturas, 1)} = **{br(score_k, 1)}**."
+        )
+        g_reg = alt.Chart(pd.DataFrame({"x": [score_k]})).mark_rule(color="#e45756", strokeWidth=3).encode(x=x_s)
+        st.altair_chart((g_cont + g_area + g_reg + g_txt).properties(height=260), width="stretch")
+        st.caption("A linha vermelha é o centro de gravidade: o score do cliente.")
+
         pk = det["pert_saida"][0]
+        top2 = [int(i) for i in np.argsort(-forca_k)[:2] if forca_k[i] > 0]
+        motivos = "; ".join(f"regra {i + 1} ({fs.REGRAS_PORQUE[i].rstrip('.').lower()})" for i in top2)
+        st.success(
+            f"**Resultado para o cliente {cliente}: score {score_k:.0f}, {fs.CLASSES[cls_k].lower()}.** "
+            f"As regras que mais pesaram foram: {motivos}. "
+            f"Em graus: {pct(pk[0])} baixa, {pct(pk[1])} média e {pct(pk[2])} alta dependência. "
+            "O próprio resultado é fuzzy: o cliente pode pertencer a duas classes ao mesmo tempo.",
+            icon=":material/check_circle:",
+        )
         with st.container(horizontal=True):
             st.metric(f"Score do cliente {cliente}", f"{score_k:.0f}", border=True)
             st.metric("Classe (maior pertinência)", fs.CLASSES[cls_k], border=True)
-        st.markdown("##### O score também é fuzzy")
-        with st.container(horizontal=True):
             for nome_cl, valor_cl in zip(fs.CLASSES, pk):
-                st.metric(nome_cl, pct(valor_cl), border=True)
+                st.metric(f"Pertinência: {nome_cl.lower()}", pct(valor_cl), border=True)
         st.caption(
             "O score é um ponto de equilíbrio, por isso raramente chega a 0 ou 100 "
-            f"(nesta base vai de {score_todos.min():.0f} a {score_todos.max():.0f}). A classe é a faixa em que o score tem "
-            "maior pertinência. Um score de 62, por exemplo, é um pouco \"média\" e mais \"alta\": o cliente pode pertencer a duas classes ao mesmo tempo."
+            f"(nesta base vai de {score_todos.min():.0f} a {score_todos.max():.0f}). A classe é a faixa em que o score tem a maior pertinência."
         )
 
 # ==========================================================================
-# 6. Resultados
+# 7. Resultados
 # ==========================================================================
 with t6:
     entre = float((R["pert_saida"].max(axis=1) < 0.6).mean())
+    with st.container(border=True):
+        st.subheader("O que cada classe significa")
+        for nome_cl, texto_c in DEFINICAO_CLASSES.items():
+            st.markdown(f"- **{nome_cl}:** {texto_c}")
+        st.caption("Lembrete: esta é uma classificação de comportamento de uso, definida pelas nossas regras. Não é uma previsão de inadimplência.")
+
     with st.container(border=True):
         st.subheader("O score aplicado a todos os clientes")
         st.markdown(
@@ -566,15 +726,15 @@ with t6:
         st.altair_chart((hist + cortes).properties(height=260), width="stretch")
         st.caption("Linhas tracejadas em 35 e 65: onde a classe muda (cruzamento entre as faixas baixa/média e média/alta).")
 
+    base_cl = df.assign(_classe=np.array(fs.CLASSES)[classe_todos], _uso=V["uso"], _pag=V["pagamento"],
+                        _saq=V["saque"], _comp=V["compras"])
+    resumo = base_cl.groupby("_classe").agg(
+        clientes=("CUST_ID", "size"), uso=("_uso", "mean"), pag=("_pag", "mean"), saq=("_saq", "mean"),
+        comp=("_comp", "mean"), saldo=("BALANCE", "mean"), saque_valor=("CASH_ADVANCE", "mean"),
+        compras_valor=("PURCHASES", "mean"),
+    ).reindex(fs.CLASSES)
     with st.container(border=True):
         st.subheader("Perfil de cada classe")
-        base_cl = df.assign(_classe=np.array(fs.CLASSES)[classe_todos], _uso=V["uso"], _pag=V["pagamento"],
-                            _saq=V["saque"], _comp=V["compras"])
-        resumo = base_cl.groupby("_classe").agg(
-            clientes=("CUST_ID", "size"), uso=("_uso", "mean"), pag=("_pag", "mean"), saq=("_saq", "mean"),
-            comp=("_comp", "mean"), saldo=("BALANCE", "mean"), saque_valor=("CASH_ADVANCE", "mean"),
-            compras_valor=("PURCHASES", "mean"),
-        ).reindex(fs.CLASSES)
         st.dataframe(pd.DataFrame({
             "Classe": fs.CLASSES,
             "Clientes": [f"{int(x):,}".replace(",", ".") for x in resumo["clientes"]],
@@ -589,9 +749,7 @@ with t6:
         }), hide_index=True)
         st.markdown(
             "**Leitura:** a classe de alta dependência usa a maior parte do limite, quase nunca paga a fatura inteira e saca "
-            "dinheiro com frequência. A de baixa dependência faz o contrário. Isso mostra que o critério "
-            "definido pelas regras separa comportamentos diferentes. Mas é uma **consistência** com a nossa intuição, não uma validação "
-            "contra inadimplência."
+            "dinheiro com frequência. A de baixa dependência faz o contrário."
         )
 
     with st.container(border=True):
@@ -620,24 +778,58 @@ with t6:
                            file_name="score_fuzzy.csv", mime="text/csv", icon=":material/download:")
 
 # ==========================================================================
-# 7. Conclusões
+# 8. Conclusões
 # ==========================================================================
 with t7:
+    n_cls = resumo["clientes"].to_numpy()
+    alta, baixa = fs.CLASSES[2], fs.CLASSES[0]
+    outras = base_cl.groupby("_classe")[["PAYMENTS", "PURCHASES", "CASH_ADVANCE", "CREDIT_LIMIT", "MINIMUM_PAYMENTS"]].mean().reindex(fs.CLASSES)
+
+    def razao(col: str) -> float:
+        return float(outras.loc[alta, col] / max(outras.loc[baixa, col], 1e-9))
+
     with st.container(border=True):
-        st.subheader("O que foi feito")
+        st.subheader("Resposta ao problema")
         st.markdown(
-            "1. **Dados:** 8.950 clientes de cartão, 17 características de comportamento, sem rótulo de bom ou mau pagador.\n"
-            "2. **Conceito:** a lógica fuzzy troca o \"sim ou não\" por graus de pertinência entre 0 e 1.\n"
-            "3. **Fuzzificação:** 4 informações viram graus de baixa, média e alta por meio de curvas com 3 pontos de corte.\n"
-            "4. **Regras:** 13 regras SE-ENTÃO combinam as informações (E = mínimo).\n"
-            "5. **Score:** as regras ativas formam uma área; seu centro de gravidade é o score de 0 a 100.\n"
-            "6. **Resultados:** todos os clientes receberam score e classe, e muitos ficam entre duas classes."
+            f"A pergunta era: **quais clientes dependem do crédito do cartão, e o quanto?** Com a lógica fuzzy chegamos a:\n\n"
+            f"- **{pct(n_cls[2] / len(df))} dos clientes ({br(n_cls[2])}) têm alta dependência**: em média usam "
+            f"{pct(resumo.loc[alta, 'uso'])} do limite, pagam por inteiro só {pct(resumo.loc[alta, 'pag'])} das faturas "
+            f"e têm {pct(resumo.loc[alta, 'saq'])} de índice de saque.\n"
+            f"- **{pct(n_cls[0] / len(df))} ({br(n_cls[0])}) têm baixa dependência**: usam {pct(resumo.loc[baixa, 'uso'])} do limite, "
+            f"pagam por inteiro {pct(resumo.loc[baixa, 'pag'])} das faturas e quase não sacam ({pct(resumo.loc[baixa, 'saq'])}).\n"
+            f"- **{pct(n_cls[1] / len(df))} ({br(n_cls[1])}) ficam na classe média**, e {pct(entre)} de todos os clientes estão "
+            "**na zona de transição entre duas classes**."
         )
+        st.markdown(
+            "**Na prática:** os clientes de alta dependência seriam os primeiros a acompanhar (renegociação, ajuste de limite, oferta de "
+            "um crédito mais barato que o saque no cartão). Os de baixa dependência usam o cartão como meio de pagamento, "
+            "e os de transição são os que mais merecem um olhar caso a caso."
+        )
+    with st.container(border=True):
+        st.subheader("O score faz sentido? Um teste com colunas que não usamos")
+        st.markdown(
+            "Se o score captura algo real, ele também deve diferenciar as classes em **colunas que não entraram no cálculo**. "
+            f"Comparando a classe de alta com a de baixa dependência: saca **{br(razao('CASH_ADVANCE'), 1)}×** mais dinheiro (valor), "
+            f"compra **{br(1 / razao('PURCHASES'), 1)}×** menos em valor total, e tem limite médio de "
+            f"{fcm.formatar_valor('CREDIT_LIMIT', outras.loc[alta, 'CREDIT_LIMIT'])} contra {fcm.formatar_valor('CREDIT_LIMIT', outras.loc[baixa, 'CREDIT_LIMIT'])}. "
+            "Isso é coerente com o perfil de quem usa o cartão como empréstimo, mas é apenas um teste de consistência: "
+            "a base não tem informação de inadimplência para confirmar o risco."
+        )
+        st.dataframe(pd.DataFrame({
+            "Classe": fs.CLASSES,
+            "Pagamentos (valor no período)": [fcm.formatar_valor("PAYMENTS", x) for x in outras["PAYMENTS"]],
+            "Compras (valor no período)": [fcm.formatar_valor("PURCHASES", x) for x in outras["PURCHASES"]],
+            "Saque (valor no período)": [fcm.formatar_valor("CASH_ADVANCE", x) for x in outras["CASH_ADVANCE"]],
+            "Limite de crédito": [fcm.formatar_valor("CREDIT_LIMIT", x) for x in outras["CREDIT_LIMIT"]],
+            "Pagamento mínimo (valor)": [fcm.formatar_valor("MINIMUM_PAYMENTS", x) for x in outras["MINIMUM_PAYMENTS"]],
+        }), hide_index=True)
     with st.container(border=True):
         st.subheader("O que a lógica fuzzy trouxe")
         st.markdown(
-            "- **Transição gradual:** dois clientes parecidos recebem scores parecidos, sem saltos bruscos.\n"
-            "- **Explicabilidade:** para qualquer cliente dá para mostrar exatamente por que ele recebeu aquele score (abas 3 a 5).\n"
+            "- **Transição gradual:** dois clientes parecidos recebem scores parecidos, sem saltos bruscos. Por isso é possível dizer "
+            f"que {pct(entre)} dos clientes estão entre duas classes, em vez de forçá-los em uma.\n"
+            "- **Explicabilidade:** para qualquer cliente dá para mostrar por que ele recebeu aquele score (abas 4 a 6): quais graus, "
+            "quais regras e como o número final foi calculado.\n"
             "- **Conhecimento de especialista:** o critério é escrito em linguagem natural, sem precisar de rótulos nos dados."
         )
     with st.container(border=True):

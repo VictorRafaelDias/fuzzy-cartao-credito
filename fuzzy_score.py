@@ -81,6 +81,36 @@ REGRAS = [
 ]
 
 
+# Raciocínio de cada regra (mesma ordem de REGRAS).
+REGRAS_PORQUE = [
+    "Saca dinheiro com frequência e não quita a fatura: financia-se com o cartão.",
+    "Limite quase todo usado e fatura paga só em parte: carrega dívida.",
+    "Usa o cartão só para sacar, quase não compra: é empréstimo, não meio de pagamento.",
+    "Saca de vez em quando e já está com o limite apertado.",
+    "Meio-termo no uso do limite e no pagamento da fatura.",
+    "Saca às vezes e paga a fatura em parte.",
+    "Compra bastante, mas paga só parte da fatura: pode estar financiando as compras.",
+    "Limite bastante usado, mas ainda paga parte da fatura.",
+    "Não saca, mas também não quita a fatura e tem saldo em aberto.",
+    "Não saca e costuma quitar a fatura: usa como meio de pagamento.",
+    "Usa pouco do limite e não saca: baixa necessidade de crédito.",
+    "Compra bastante e paga a fatura inteira: usa como meio de pagamento.",
+    "Pouco saldo em aberto e paga a fatura inteira.",
+]
+
+# Eixo horizontal de cada entrada (para os gráficos).
+EIXOS = {
+    "uso": "% do limite usado",
+    "pagamento": "% das faturas quitadas",
+    "saque": "índice de saque (%)",
+    "compras": "índice de compras (%)",
+}
+
+
+def texto_cond(entrada: str, termo: str) -> str:
+    return f"{ENTRADAS[entrada]['rotulo']} é {termo.upper()}"
+
+
 def texto_condicao(i: int) -> str:
     cond, _ = REGRAS[i]
     return " E ".join(f"{ENTRADAS[e]['rotulo'].lower()} é {t.upper()}" for e, t in cond)
