@@ -703,37 +703,87 @@ with t5:
                     (alt.Chart(corte).mark_area(color=fs.COR_CLASSE[j], opacity=0.7).encode(x=xs, y=ys)
                      + alt.Chart(contorno).mark_line(color=CINZA, strokeWidth=1.5).encode(x=xs, y=ys)).properties(height=150),
                     width="stretch")
-        st.markdown("**Agregação** é juntar as três regiões preenchidas em uma só área (a **área laranja** abaixo).")
+        st.markdown(
+            "**Agregação** é juntar as três regiões preenchidas em uma só figura: a **área laranja** do gráfico abaixo."
+        )
+        st.markdown("##### Como ler este gráfico")
+        st.markdown(
+            "- **Eixo horizontal (de 0 a 100):** os **scores possíveis**. Cada ponto da linha é um score que o cliente poderia ter.\n"
+            "- **Eixo vertical, a \"altura\" (de 0 a 1):** o **quanto as regras apoiam aquele score**. 0 = nenhuma regra defende esse score; "
+            "1 = apoio total.\n"
+            "- **Contornos cinzas e os nomes no alto do gráfico (baixa, média, alta dependência):** são as três regiões da escala. "
+            "Os nomes no topo só dizem **qual contorno é qual**: a região \"baixa\" fica à esquerda (scores baixos), "
+            "a \"alta\" à direita (scores altos).\n"
+            "- **Área laranja:** o resultado das regras deste cliente. Onde ela é **alta**, as regras defendem aquele score; "
+            "onde é **zero**, ninguém defende."
+        )
         contornos = pd.DataFrame({
             "x": np.tile(grade, 3), "grau": det["saida"].ravel(), "faixa": np.repeat(fs.CLASSES, len(grade)),
         })
         area = pd.DataFrame({"x": grade, "grau": det["agregada"][0]})
-        rotulos_x = pd.DataFrame({"x": [8, 50, 92], "grau": [1.08] * 3, "txt": ["baixa", "média", "alta"]})
-        x_s = alt.X("x:Q", title="score de dependência do crédito (0 a 100)", scale=alt.Scale(domain=[0, 100]))
-        y_s = alt.Y("grau:Q", title="grau de pertinência", scale=alt.Scale(domain=[0, 1.15]),
+        rotulos_x = pd.DataFrame({
+            "x": [10, 50, 90], "grau": [1.1] * 3,
+            "txt": ["região BAIXA dependência", "região MÉDIA dependência", "região ALTA dependência"],
+        })
+        x_pico = float(grade[int(np.argmax(det["agregada"][0]))])
+        rotulo_area = pd.DataFrame({"x": [min(max(x_pico, 22), 78)], "grau": [float(det["agregada"][0].max()) / 2],
+                                    "txt": ["área laranja = resultado das regras"]})
+        x_s = alt.X("x:Q", title="score possível (0 a 100)", scale=alt.Scale(domain=[0, 100]),
+                    axis=alt.Axis(values=list(range(0, 101, 10))))
+        y_s = alt.Y("grau:Q", title="altura = apoio das regras (0 a 1)", scale=alt.Scale(domain=[0, 1.2]),
                     axis=alt.Axis(values=[0, 0.5, 1], format=".1f"))
         g_cont = alt.Chart(contornos).mark_line(color=CINZA, strokeWidth=1.5).encode(x=x_s, y=y_s, detail="faixa:N")
         g_area = alt.Chart(area).mark_area(color="#f58518", opacity=0.65).encode(x=x_s, y=y_s)
         g_txt = alt.Chart(rotulos_x).mark_text(color=CINZA, fontSize=12).encode(x=x_s, y=y_s, text="txt:N")
-        st.altair_chart((g_cont + g_area + g_txt).properties(height=260), width="stretch")
+        g_txt_area = alt.Chart(rotulo_area).mark_text(color="white", fontSize=12, fontWeight="bold").encode(
+            x=x_s, y=y_s, text="txt:N")
+        st.altair_chart((g_cont + g_area + g_txt + g_txt_area).properties(height=280), width="stretch")
 
     with st.container(border=True):
         st.subheader("Passo 4 · Defuzzificação: da área ao score")
         agg = det["agregada"][0]
+        st.markdown(
+            "A área laranja é uma **figura**, mas queremos **um número**: o score. Para isso usamos uma **média**, com um detalhe: "
+            "**cada score possível conta na proporção da sua altura**. Um score que as regras defendem muito (altura grande) puxa a média "
+            "com força; um score que ninguém defende (altura zero) não puxa nada."
+        )
+        st.markdown(
+            "É o mesmo que perguntar: *se a área laranja fosse uma placa de madeira, em que ponto ela ficaria em equilíbrio, como numa "
+            "gangorra?* Esse ponto é o **centro de gravidade** e é o score. A conta é:\n\n"
+            "**score = soma de (posição × altura) ÷ soma das alturas**\n\n"
+            "onde **posição** é o score possível (o número no eixo horizontal) e **altura** é o apoio das regras naquela posição "
+            "(a altura da área laranja ali)."
+        )
+        st.markdown("##### A conta passo a passo (de 10 em 10 pontos)")
+        posicoes = np.arange(0, 101, 10)
+        alturas = np.interp(posicoes, grade, agg)
+        tabela_conta = pd.DataFrame({
+            "Posição (score possível)": posicoes,
+            "Altura (apoio das regras)": [br(h, 2) for h in alturas],
+            "Posição × altura": [br(p_ * h, 1) for p_, h in zip(posicoes, alturas)],
+        })
+        total = pd.DataFrame({
+            "Posição (score possível)": ["TOTAL"],
+            "Altura (apoio das regras)": [br(alturas.sum(), 2)],
+            "Posição × altura": [br((posicoes * alturas).sum(), 1)],
+        })
+        st.dataframe(pd.concat([tabela_conta.astype(str), total.astype(str)]), hide_index=True)
+        aprox = float((posicoes * alturas).sum() / alturas.sum()) if alturas.sum() > 0 else 50.0
         soma_ponderada = float((grade * agg).sum())
         soma_alturas = float(agg.sum())
         st.markdown(
-            "Falta transformar a área em **um único número**. Usa-se o **centro de gravidade**: o ponto da escala onde a área se "
-            "equilibraria, como o ponto de equilíbrio de uma régua com pesos. Na conta:\n\n"
-            "**score = soma de (posição × altura da área) ÷ soma das alturas**"
-        )
-        st.markdown(
-            f"Neste cliente: soma de (posição × altura) = **{br(soma_ponderada, 1)}** e soma das alturas = **{br(soma_alturas, 1)}**, "
-            f"logo score = {br(soma_ponderada, 1)} ÷ {br(soma_alturas, 1)} = **{br(score_k, 1)}**."
+            f"**Score aproximado** = {br((posicoes * alturas).sum(), 1)} ÷ {br(alturas.sum(), 2)} = **{br(aprox, 1)}**. "
+            f"O programa faz a mesma conta com 201 posições (de 0,5 em 0,5), mais precisa: "
+            f"{br(soma_ponderada, 1)} ÷ {br(soma_alturas, 1)} = **{br(score_k, 1)}**."
         )
         g_reg = alt.Chart(pd.DataFrame({"x": [score_k]})).mark_rule(color="#e45756", strokeWidth=3).encode(x=x_s)
-        st.altair_chart((g_cont + g_area + g_reg + g_txt).properties(height=260), width="stretch")
-        st.caption("A linha vermelha é o centro de gravidade: o score do cliente.")
+        g_reg_txt = alt.Chart(pd.DataFrame({"x": [score_k], "grau": [1.17], "txt": [f"score = {br(score_k, 1)}"]})).mark_text(
+            color="#e45756", fontSize=13, fontWeight="bold", dx=48).encode(x=x_s, y=y_s, text="txt:N")
+        st.altair_chart((g_cont + g_area + g_reg + g_reg_txt).properties(height=280), width="stretch")
+        st.caption(
+            "A linha vermelha é o ponto de equilíbrio da área laranja: o score do cliente. Se as regras defendessem só scores altos, "
+            "a área ficaria à direita e a linha também; se defendessem só scores baixos, iria para a esquerda."
+        )
 
         pk = det["pert_saida"][0]
         top2 = [int(i) for i in np.argsort(-forca_k)[:2] if forca_k[i] > 0]
