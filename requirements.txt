@@ -4,3 +4,4 @@ scikit-learn
 matplotlib
 altair
 streamlit>=1.57
+jinja2>=3.1.5

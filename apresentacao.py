@@ -551,17 +551,31 @@ with t4:
             "A **força** é o **menor** desses graus. É como uma corrente: ela é tão forte quanto o elo mais fraco. "
             "Se uma condição não se aplica ao cliente (0%), a regra inteira vale 0% e não influencia o resultado."
         )
-        filas = []
+        col_forca = f"Força para o cliente {cliente}"
+        cols_cond = ["SE (condição 1)", "E (condição 2)", "E (condição 3)"]
+        filas, graus_cond = [], []
         for i, (cond, cons) in enumerate(fs.REGRAS):
-            cel = [f"{fs.texto_cond(e, t)} ({pct(det['mu'][e][0][fs.TERMOS.index(t)])})" for e, t in cond]
+            gs = [float(det["mu"][e][0][fs.TERMOS.index(t)]) for e, t in cond]
+            cel = [f"{fs.texto_cond(e, t)} ({pct(g)})" for (e, t), g in zip(cond, gs)]
             cel += ["-"] * (3 - len(cel))
+            graus_cond.append(gs + [None] * (3 - len(gs)))
             filas.append({
-                "Nº": i + 1, "SE (condição 1)": cel[0], "E (condição 2)": cel[1], "E (condição 3)": cel[2],
+                "Nº": i + 1, cols_cond[0]: cel[0], cols_cond[1]: cel[1], cols_cond[2]: cel[2],
                 "ENTÃO a dependência é": cons.upper(), "Raciocínio": fs.REGRAS_PORQUE[i],
-                f"Força para o cliente {cliente}": forca_k[i],
+                col_forca: forca_k[i],
             })
+        tabela_r = pd.DataFrame(filas)
+        cores = pd.DataFrame("", index=tabela_r.index, columns=tabela_r.columns)
+        for i, gs in enumerate(graus_cond):
+            for j, g in enumerate(gs):
+                if g is not None and g > 0:  # condição que o cliente tem: azul, mais forte = maior grau
+                    cores.loc[i, cols_cond[j]] = f"background-color: rgba(41, 151, 255, {0.18 + 0.62 * g:.2f})"
+            if forca_k[i] > 0:  # regra ativa: a conclusão ganha a cor da classe
+                hexa = fs.COR_CLASSE[fs.TERMOS.index(fs.REGRAS[i][1])].lstrip("#")
+                rgb = ", ".join(str(int(hexa[n:n + 2], 16)) for n in (0, 2, 4))
+                cores.loc[i, "ENTÃO a dependência é"] = f"background-color: rgba({rgb}, 0.45)"
         st.dataframe(
-            pd.DataFrame(filas), hide_index=True,
+            tabela_r.style.apply(lambda _: cores, axis=None), hide_index=True,
             column_config={
                 "Nº": st.column_config.NumberColumn(width="small"),
                 "SE (condição 1)": st.column_config.TextColumn(width="large"),
@@ -572,7 +586,12 @@ with t4:
                     min_value=0.0, max_value=1.0, format="percent"),
             },
         )
-        st.caption(f"{int((forca_k > 0).sum())} das {len(fs.REGRAS)} regras têm alguma força para este cliente.")
+        st.caption(
+            "**Cores:** uma condição fica **azul** quando o cliente a tem (quanto mais escuro, maior o grau). Condição sem cor = o cliente "
+            "não tem aquela faixa (grau 0%). Quando a regra tem força, a conclusão (ENTÃO) ganha a cor da classe "
+            "(verde = baixa, amarelo = média, vermelho = alta). "
+            f"{int((forca_k > 0).sum())} das {len(fs.REGRAS)} regras têm alguma força para este cliente."
+        )
 
     with st.container(border=True):
         st.subheader("Quais regras mais influenciam o resultado deste cliente?")
@@ -607,6 +626,46 @@ with t4:
                 f"- **Regra {r_i + 1}** ({fs.REGRAS_PORQUE[r_i].lower()}) Condições: {'; '.join(partes)}. "
                 f"Força = o menor grau = **{pct(forca_k[r_i])}**. Conclusão: dependência **{cons.upper()}**."
             )
+
+    with st.container(border=True):
+        st.subheader("Comparar com outros clientes")
+        st.markdown(
+            "Acima analisamos um cliente por vez (o escolhido na barra lateral). Aqui você coloca **vários clientes lado a lado**: "
+            "cada coluna é um cliente e cada linha uma regra, com a **força** da regra para aquele cliente (azul mais forte = "
+            "regra mais forte). Assim dá para ver quais regras valem para cada perfil."
+        )
+        i_max, i_min = int(np.argmax(score_todos)), int(np.argmin(score_todos))
+        padrao_cmp = list(dict.fromkeys([cliente, ids[i_max], ids[i_min]]))
+        escolhidos = st.multiselect(
+            "Clientes para comparar", ids, default=padrao_cmp, max_selections=6, key="comparar",
+            help="Começa com o cliente escolhido, o de maior score e o de menor score. Digite um código para buscar outro.",
+        )
+        if escolhidos:
+            ks = [ids.index(x) for x in escolhidos]
+            det_c = fs.inferir(V.iloc[ks], pontos=pontos)
+            resumo_c = pd.DataFrame({
+                "Cliente": escolhidos,
+                "Score": [f"{x:.0f}" for x in det_c["score"]],
+                "Classe": [fs.CLASSES[i] for i in det_c["classe"]],
+                "Utilização do limite": [pct(V["uso"].iloc[k]) for k in ks],
+                "Pagamento integral": [pct(V["pagamento"].iloc[k]) for k in ks],
+                "Freq. de saque": [pct(V["saque"].iloc[k]) for k in ks],
+                "Freq. de compras": [pct(V["compras"].iloc[k]) for k in ks],
+            })
+            st.dataframe(resumo_c, hide_index=True)
+            matriz = pd.DataFrame(
+                det_c["forca"].T, columns=escolhidos,
+                index=[f"Regra {i + 1} → {cons.upper()}" for i, (_, cons) in enumerate(fs.REGRAS)],
+            )
+            matriz.insert(0, "Condições da regra", [fs.texto_condicao(i) for i in range(len(fs.REGRAS))])
+            cores_m = pd.DataFrame("", index=matriz.index, columns=matriz.columns)
+            for c_ in escolhidos:
+                cores_m[c_] = [f"background-color: rgba(41, 151, 255, {0.55 * v:.2f})" if v > 0 else "" for v in matriz[c_]]
+            st.dataframe(
+                matriz.style.apply(lambda _: cores_m, axis=None).format({c_: "{:.0%}" for c_ in escolhidos}),
+                column_config={"Condições da regra": st.column_config.TextColumn(width="large")},
+            )
+            st.caption("Cada número é a força da regra para o cliente da coluna. Célula sem cor = a regra não se aplica a ele (0%).")
 
 # ==========================================================================
 # 6. Score
@@ -706,6 +765,27 @@ with t6:
         for nome_cl, texto_c in DEFINICAO_CLASSES.items():
             st.markdown(f"- **{nome_cl}:** {texto_c}")
         st.caption("Lembrete: esta é uma classificação de comportamento de uso, definida pelas nossas regras. Não é uma previsão de inadimplência.")
+
+    with st.container(border=True):
+        st.subheader("Quantos clientes em cada classe?")
+        cont = np.bincount(classe_todos, minlength=3)
+        df_cls = pd.DataFrame({
+            "Classe": fs.CLASSES, "Clientes": cont, "Percentual": cont / cont.sum(),
+        })
+        df_cls["Rótulo"] = [f"{pct(p, 1)} ({br(n)} clientes)" for p, n in zip(df_cls["Percentual"], df_cls["Clientes"])]
+        esc_cls = alt.Scale(domain=fs.CLASSES, range=fs.COR_CLASSE)
+        barras_c = alt.Chart(df_cls).mark_bar(cornerRadiusEnd=4).encode(
+            y=alt.Y("Classe:N", sort=fs.CLASSES, title=None),
+            x=alt.X("Percentual:Q", axis=alt.Axis(format="%"), title="% dos clientes", scale=alt.Scale(domain=[0, max(0.6, float(df_cls["Percentual"].max()) + 0.15)])),
+            color=alt.Color("Classe:N", scale=esc_cls, legend=None),
+            tooltip=["Classe", "Clientes", alt.Tooltip("Percentual:Q", format=".1%")],
+        )
+        rotulos_c = barras_c.mark_text(align="left", dx=6, fontSize=13).encode(text="Rótulo:N", color=alt.value("#c9ccd1"))
+        st.altair_chart((barras_c + rotulos_c).properties(height=170), width="stretch")
+        st.caption(
+            f"A classe com mais clientes é **{fs.CLASSES[int(np.argmax(cont))].lower()}** ({pct(cont.max() / cont.sum(), 1)}). "
+            "Os percentuais mudam se você alterar os pontos de corte na barra lateral."
+        )
 
     with st.container(border=True):
         st.subheader("O score aplicado a todos os clientes")
